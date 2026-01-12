@@ -25,25 +25,40 @@ const PORT = Number(process.env.PORT || 3000);
 const MONDAY_TOKEN = reqEnv("MONDAY_TOKEN");
 const BURSA_BASE = reqEnv("BURSA_BASE");
 
-const DEAL_OWNER_COLUMN_ID = reqEnv("DEAL_OWNER_COLUMN_ID"); // people column: deal_owner
-const ERROR_COLUMN_ID = reqEnv("ERROR_COLUMN_ID");
+// Monday column IDs (set these in env)
+const DEAL_OWNER_COLUMN_ID = reqEnv("DEAL_OWNER_COLUMN_ID"); // People column: Principal
+const ERROR_COLUMN_ID = reqEnv("ERROR_COLUMN_ID");           // Text column to write errors
 
 const SUCCESS_LABEL = reqEnv("TRIGGER_STATUS_SUCCESS_LABEL");
 const ERROR_LABEL = reqEnv("TRIGGER_STATUS_ERROR_LABEL");
 
+// Optional: process webhook only when status becomes this label
 const TRIGGER_ONLY_LABEL = process.env.TRIGGER_STATUS_ONLY_LABEL || "";
+
+// Optional: where you store "FRIGO / ADR / AGABARIT / PODEA CULISANTA" text/tags
+// Can be dropdown/multi-select/tags/status — we just parse .text
+const FLAGS_COLUMN_ID = process.env.FLAGS_COLUMN_ID || ""; // e.g. "dropdown_xxx" or "tags_xxx"
+
+// Optional: private notes column (if you want to include flags there too)
+const PRIVATE_NOTICE_COLUMN_ID = process.env.PRIVATE_NOTICE_COLUMN_ID || "";
+
+// Optional: second people column used in your logic ("Preluat de")
+const PRELUAT_DE_COLUMN_ID = process.env.PRELUAT_DE_COLUMN_ID || "multiple_person_mkybbcca";
 
 // =====================
 // USER_MAP (Base64("user:pass"))
 // =====================
-// base64("123cargos:bursaTransport") = MTIzY2FyZ29zOmJ1cnNhVHJhbnNwb3J0
+// IMPORTANT: keep credentials in env/secret manager if possible
 const USER_MAP: Record<number, { basicB64: string }> = {
-  96280246: { basicB64: "cmFmYWVsLm9AY3J5c3RhbC1sb2dpc3RpY3Mtc2VydmljZXMuY29tOlRyYW5zcG9ydC4yMDI0" }
-  // adaugi restul userId-urilor monday aici...
+  96280246: {
+    basicB64:
+      "cmFmYWVsLm9AY3J5c3RhbC1sb2dpc3RpY3Mtc2VydmljZXMuY29tOlRyYW5zcG9ydC4yMDI0",
+  },
+  // add rest of monday userIds here...
 };
 
 // =====================
-// TYPES (minim strict)
+// TYPES
 // =====================
 type MondayColumnValue = { id: string; text: string | null; value: string | null };
 type MondayItem = { id: string; name: string; column_values: MondayColumnValue[] };
@@ -53,7 +68,7 @@ type MondayWebhookBody = {
     boardId: number;
     pulseId?: number;
     itemId?: number;
-    columnId: string; // status column id care a declansat
+    columnId: string;
     value?: any;
     previousValue?: any;
   };
@@ -108,7 +123,6 @@ async function changeStatusLabel(boardId: number, itemId: number, statusColId: s
   return mondayGql(m, { boardId, itemId, colId: statusColId, val: JSON.stringify({ label }) });
 }
 
-// Uneori la status ai doar index; aici încercăm să scoatem label dacă există.
 function getStatusLabel(col: MondayColumnValue | undefined): string {
   if (!col?.value) return "";
   try {
@@ -134,18 +148,15 @@ function getFirstPersonIdFromPeopleValue(valueJson: string | null): number | nul
   }
 }
 
-// IMPORTANT: user-ul pentru 123cargo se alege din:
-// - "Principal" (deal_owner) dacă există
-// - altfel "Preluat de" (multiple_person_mkybbcca)
 function pickBasicAuthHeaderFromOwner(cols: Record<string, MondayColumnValue>) {
   const principalId = getFirstPersonIdFromPeopleValue(cols[DEAL_OWNER_COLUMN_ID]?.value ?? null);
-  const preluatDeId = getFirstPersonIdFromPeopleValue(cols["multiple_person_mkybbcca"]?.value ?? null);
+  const preluatDeId = getFirstPersonIdFromPeopleValue(cols[PRELUAT_DE_COLUMN_ID]?.value ?? null);
 
   const ownerId = principalId ?? preluatDeId;
   if (!ownerId) {
     return {
       ok: false as const,
-      error: `Trebuie completat fie 'Principal' (${DEAL_OWNER_COLUMN_ID}), fie 'Preluat de' (multiple_person_mkybbcca).`
+      error: `Trebuie completat fie 'Principal' (${DEAL_OWNER_COLUMN_ID}), fie 'Preluat de' (${PRELUAT_DE_COLUMN_ID}).`,
     };
   }
 
@@ -156,169 +167,8 @@ function pickBasicAuthHeaderFromOwner(cols: Record<string, MondayColumnValue>) {
 }
 
 // =====================
-// BUSINESS RULES VALIDATION
+// NORMALIZATION HELPERS
 // =====================
-function validateBusinessRules(cols: Record<string, MondayColumnValue>): string[] {
-  const errors: string[] = [];
-
-  // 1) Mod Transport Principal (color_mkx12a19) trebuie să fie doar "Rutier / Road" sau "Alege!"
-  const modTransportPrincipal = (cols["color_mkx12a19"]?.text ?? "").trim();
-  if (modTransportPrincipal) {
-    const normalized = modTransportPrincipal.toLowerCase();
-    const isValid = 
-      normalized === "rutier / road" || 
-      normalized === "rutier" || 
-      normalized === "road" || 
-      normalized === "alege!" ||
-      normalized === "alege";
-    
-    if (!isValid) {
-      errors.push(`Modul de transport principal trebuie să fie «Rutier / Road» sau «Alege!», nu «${modTransportPrincipal}»`);
-    }
-  }
-
-  // 2) Tip Marfa NU are voie să fie "Deșeuri / Waste"
-  const tipMarfa = (cols["dropdown_mkx1s5nv"]?.text ?? "").trim();
-  if (tipMarfa) {
-    const normalized = tipMarfa.toLowerCase()
-      .replace(/ă/g, "a")
-      .replace(/â/g, "a")
-      .replace(/î/g, "i")
-      .replace(/ș/g, "s")
-      .replace(/ş/g, "s")
-      .replace(/ț/g, "t")
-      .replace(/ţ/g, "t");
-    
-    if (normalized.includes("deseuri") || normalized.includes("waste")) {
-      errors.push(`Tip Marfa nu poate fi «Deșeuri / Waste». Valoare curentă: «${tipMarfa}»`);
-    }
-  }
-
-  return errors;
-}
-
-// =====================
-// VALIDATORS (regulile reale)
-// =====================
-function validateRequired(cols: Record<string, MondayColumnValue>): string[] {
-  const errors: string[] = [];
-
-  const isNonEmptyText = (id: string) => (cols[id]?.text ?? "").trim().length > 0;
-  const parseNumber = (s: string) => {
-    const n = Number(String(s).replace(",", ".").trim());
-    return Number.isFinite(n) ? n : NaN;
-  };
-
-  // 1) People: Principal SAU Preluat de
-  const principalId = getFirstPersonIdFromPeopleValue(cols["deal_owner"]?.value ?? null);
-  const preluatDeId = getFirstPersonIdFromPeopleValue(cols["multiple_person_mkybbcca"]?.value ?? null);
-  if (!principalId && !preluatDeId) {
-    errors.push("Trebuie completat fie 'Principal' (deal_owner), fie 'Preluat de' (multiple_person_mkybbcca).");
-  }
-
-  // 2) Buget Client (numbers) > 0
-  const bugetTxt = (cols["numeric_mkr4e4qc"]?.text ?? "").trim();
-  const buget = parseNumber(bugetTxt);
-  if (!bugetTxt || !Number.isFinite(buget) || buget <= 0) {
-    errors.push("Buget Client (numeric_mkr4e4qc) trebuie sa fie un numar > 0.");
-  }
-
-  // 3) Moneda (status) obligatoriu
-  if (!isNonEmptyText("color_mksh2abx")) {
-    errors.push("Moneda (color_mksh2abx) este obligatorie.");
-  }
-
-  // 4) Tara/Localitate incarcare
-  if (!isNonEmptyText("dropdown_mkx6jyjf")) errors.push("Tara Incarcare (dropdown_mkx6jyjf) este obligatorie.");
-  if (!isNonEmptyText("text_mkypcczr")) errors.push("Localitate Incarcare (text_mkypcczr) este obligatorie.");
-
-  // 5) Tara/Localitate descarcare
-  if (!isNonEmptyText("dropdown_mkx687jv")) errors.push("Tara Descarcare (dropdown_mkx687jv) este obligatorie.");
-  if (!isNonEmptyText("text_mkypxb8h")) errors.push("Localitate Descarcare (text_mkypxb8h) este obligatorie.");
-
-  // 6) Greutate (KG) numeric > 0 (text)
-  const greutateTxt = (cols["text_mkt9nr81"]?.text ?? "").trim();
-  const greutate = parseNumber(greutateTxt);
-  if (!greutateTxt || !Number.isFinite(greutate) || greutate <= 0) {
-    errors.push("Greutate (KG) (text_mkt9nr81) trebuie sa fie un numar > 0.");
-  }
-
-  // 7) Data Inc. (date) obligatorie
-  if (!isNonEmptyText("date_mkx77z0m")) {
-    errors.push("Data Inc. (date_mkx77z0m) este obligatorie.");
-  }
-
-  // 8) Nr. zile valabile Incarcare (numbers) > 0
-  const zileTxt = (cols["numeric_mkypzwfe"]?.text ?? "").trim();
-  const zile = parseNumber(zileTxt);
-  if (!zileTxt || !Number.isFinite(zile) || zile <= 0) {
-    errors.push("Nr. zile valabile Incarcare (numeric_mkypzwfe) trebuie sa fie un numar > 0.");
-  }
-
-  // 9) Tip Mijloc Transport (dropdown) obligatoriu
-  if (!isNonEmptyText("dropdown_mkx1s5nv")) {
-    errors.push("Tip Mijloc Transport (dropdown_mkx1s5nv) este obligatoriu.");
-  }
-
-  return errors;
-}
-
-// =====================
-// ISO2 + Currency helpers
-// =====================
-function normalizeCountry2LetterEnglish(input: string): string | null {
-  const t = (input ?? "").trim();
-  if (!t) return null;
-
-  // deja ISO2
-  if (/^[A-Za-z]{2}$/.test(t)) return t.toUpperCase();
-
-  // library: getAlpha2Code expects name; works well with English country names
-  const iso2 = countries.getAlpha2Code(t, "en");
-  return iso2 ? iso2.toUpperCase() : null;
-}
-
-function normalizeCurrency3(input: string): string | null {
-  const raw = (input ?? "").trim();
-  if (!raw) return null;
-
-  // dacă vine direct RON/EUR/USD
-  const upper = raw.toUpperCase();
-  if (/^[A-Z]{3}$/.test(upper)) return upper;
-
-  // dacă în monday apare "Euro", "Lei", etc.
-  const norm = raw.toLowerCase();
-  const map: Record<string, string> = {
-    "euro": "EUR",
-    "eur": "EUR",
-    "lei": "RON",
-    "ron": "RON",
-    "usd": "USD",
-    "dollar": "USD",
-    "dollars": "USD"
-  };
-
-  return map[norm] ?? null;
-}
-
-// =====================
-// TruckType mapping (UI simplificat RO)
-// =====================
-const UI_RO_TO_123CARGO_TRUCKTYPE: Record<string, { code: number; apiName: string } | null> = {
-  "duba": { code: 1, apiName: "Box" },
-  "prelata": { code: 2, apiName: "Tilt" },
-  "platforma": { code: 3, apiName: "Flat" },
-  "basculanta": { code: 5, apiName: "Tipper" },
-  "cisterna": { code: 6, apiName: "Tank" },
-  "container": { code: 7, apiName: "Container" },
-  "cisterna alimentara": { code: 8, apiName: "Liquid food container" },
-  "agabaritic": { code: 9, apiName: "Oversized" },
-  "transport autoturisme": { code: 10, apiName: "Car transporter" },
-
-  // nu există truckType dedicat în 123cargo
-  "cap tractor": null
-};
-
 function normalizeRoLabel(s: string): string {
   return (s ?? "")
     .trim()
@@ -332,20 +182,12 @@ function normalizeRoLabel(s: string): string {
     .replace(/ţ/g, "t");
 }
 
-function mapTruckTypeFromMondayUi(labelRaw: string) {
-  const key = normalizeRoLabel(labelRaw);
-  if (!key) return { ok: false as const, error: "Tip Mijloc Transport gol." };
-
-  const mapped = UI_RO_TO_123CARGO_TRUCKTYPE[key];
-  if (mapped === undefined) {
-    return { ok: false as const, error: `Tip Mijloc Transport necunoscut: '${labelRaw}'` };
-  }
-
-  if (mapped === null) {
-    return { ok: false as const, error: `Tip Mijloc Transport '${labelRaw}' nu are corespondent valid în 123cargo.` };
-  }
-
-  return { ok: true as const, code: mapped.code, apiName: mapped.apiName };
+function stripRightSideAfterSlash(raw: string): string {
+  // Handles labels like "Box / duba", "Tilt / prelata"
+  const t = (raw ?? "").trim();
+  if (!t) return "";
+  if (!t.includes("/")) return t;
+  return t.split("/").pop()!.trim();
 }
 
 function parseNumberLoose(s: string): number {
@@ -365,26 +207,231 @@ function getDateISOFromDateColumn(col: MondayColumnValue | undefined): string | 
   return t || null;
 }
 
+function normalizeCountry2LetterEnglish(input: string): string | null {
+  const t = (input ?? "").trim();
+  if (!t) return null;
+  if (/^[A-Za-z]{2}$/.test(t)) return t.toUpperCase();
+  const iso2 = countries.getAlpha2Code(t, "en");
+  return iso2 ? iso2.toUpperCase() : null;
+}
+
+function normalizeCurrency3(input: string): string | null {
+  const raw = (input ?? "").trim();
+  if (!raw) return null;
+
+  const upper = raw.toUpperCase();
+  if (/^[A-Z]{3}$/.test(upper)) return upper;
+
+  const norm = normalizeRoLabel(raw);
+  const map: Record<string, string> = {
+    euro: "EUR",
+    eur: "EUR",
+    lei: "RON",
+    ron: "RON",
+    usd: "USD",
+    dollar: "USD",
+    dollars: "USD",
+  };
+
+  return map[norm] ?? null;
+}
+
 // =====================
-// Build payload 123cargo /loads (cu pret + currency + toate obligatorii)
+// FLAGS: FRIGO / ADR / AGABARIT / PODEA CULISANTA
+// =====================
+type LoadFlags = {
+  adr: boolean;
+  frigo: boolean;
+  agabarit: boolean;
+  slidingFloor: boolean;
+};
+
+function parseFlagsFromText(raw: string): LoadFlags {
+  const t = normalizeRoLabel(raw);
+
+  const adr = /\badr\b/.test(t) || t.includes("hazard");
+  const frigo =
+    t.includes("frigo") ||
+    t.includes("frig") ||
+    t.includes("temperatura controlata") ||
+    t.includes("temperature controlled") ||
+    t.includes("reefer");
+
+  const agabarit = t.includes("agabarit") || t.includes("oversize") || t.includes("oversized");
+  const slidingFloor =
+    t.includes("podea culisanta") || t.includes("sliding floor") || t.includes("walking floor");
+
+  return { adr, frigo, agabarit, slidingFloor };
+}
+
+// =====================
+// TRUCKTYPE MAPPING
+// =====================
+// 123cargo truckType codes (spec v0.55):
+// 1 Box, 2 Tilt, 3 Flat, 9 Oversized, 10 Car transporter, 5 Tipper, 6 Tank, 8 Liquid food container, 7 Container
+const UI_RO_TO_123CARGO_TRUCKTYPE: Record<string, { code: number; apiName: string } | null> = {
+  duba: { code: 1, apiName: "Box" },
+  box: { code: 1, apiName: "Box" },
+
+  prelata: { code: 2, apiName: "Tilt" },
+  tilt: { code: 2, apiName: "Tilt" },
+
+  platforma: { code: 3, apiName: "Flat" },
+  flat: { code: 3, apiName: "Flat" },
+
+  basculanta: { code: 5, apiName: "Tipper" },
+  tipper: { code: 5, apiName: "Tipper" },
+
+  cisterna: { code: 6, apiName: "Tank" },
+  tank: { code: 6, apiName: "Tank" },
+
+  container: { code: 7, apiName: "Container" },
+
+  "cisterna alimentara": { code: 8, apiName: "Liquid food container" },
+  "liquid food container": { code: 8, apiName: "Liquid food container" },
+
+  agabaritic: { code: 9, apiName: "Oversized" },
+  oversized: { code: 9, apiName: "Oversized" },
+  oversize: { code: 9, apiName: "Oversized" },
+
+  "transport autoturisme": { code: 10, apiName: "Car transporter" },
+  "car transporter": { code: 10, apiName: "Car transporter" },
+
+  // Not a 123cargo truckType
+  "cap tractor": null,
+};
+
+function mapTruckTypeFromMondayUi(labelRaw: string) {
+  const rightSide = stripRightSideAfterSlash(labelRaw); // handles "Box / duba" -> "duba"
+  const key = normalizeRoLabel(rightSide);
+  if (!key) return { ok: false as const, error: "Tip Mijloc Transport gol." };
+
+  const mapped = UI_RO_TO_123CARGO_TRUCKTYPE[key];
+  if (mapped === undefined) {
+    return { ok: false as const, error: `Tip Mijloc Transport necunoscut: '${labelRaw}'` };
+  }
+  if (mapped === null) {
+    return { ok: false as const, error: `Tip Mijloc Transport '${labelRaw}' nu are corespondent valid în 123cargo.` };
+  }
+  return { ok: true as const, code: mapped.code, apiName: mapped.apiName };
+}
+
+// =====================
+// BUSINESS RULES VALIDATION (your custom rules)
+// =====================
+function validateBusinessRules(cols: Record<string, MondayColumnValue>): string[] {
+  const errors: string[] = [];
+
+  // 1) Mod Transport Principal (color_mkx12a19) must be "Rutier / Road" or "Alege!"
+  const modTransportPrincipal = (cols["color_mkx12a19"]?.text ?? "").trim();
+  if (modTransportPrincipal) {
+    const normalized = modTransportPrincipal.toLowerCase();
+    const isValid =
+      normalized === "rutier / road" ||
+      normalized === "rutier" ||
+      normalized === "road" ||
+      normalized === "alege!" ||
+      normalized === "alege";
+
+    if (!isValid) {
+      errors.push(
+        `Modul de transport principal trebuie să fie «Rutier / Road» sau «Alege!», nu «${modTransportPrincipal}»`
+      );
+    }
+  }
+
+  // 2) Tip Marfa must NOT be "Deșeuri / Waste"
+  const tipMarfa = (cols["dropdown_mkx1s5nv"]?.text ?? "").trim();
+  if (tipMarfa) {
+    const normalized = normalizeRoLabel(tipMarfa);
+    if (normalized.includes("deseuri") || normalized.includes("waste")) {
+      errors.push(`Tip Marfa nu poate fi «Deșeuri / Waste». Valoare curentă: «${tipMarfa}»`);
+    }
+  }
+
+  return errors;
+}
+
+// =====================
+// REQUIRED FIELDS VALIDATION
+// =====================
+function validateRequired(cols: Record<string, MondayColumnValue>): string[] {
+  const errors: string[] = [];
+
+  const isNonEmptyText = (id: string) => (cols[id]?.text ?? "").trim().length > 0;
+
+  // People: Principal OR Preluat de
+  const principalId = getFirstPersonIdFromPeopleValue(cols[DEAL_OWNER_COLUMN_ID]?.value ?? null);
+  const preluatDeId = getFirstPersonIdFromPeopleValue(cols[PRELUAT_DE_COLUMN_ID]?.value ?? null);
+  if (!principalId && !preluatDeId) {
+    errors.push("Trebuie completat fie 'Principal', fie 'Preluat de'.");
+  }
+
+  // Buget Client (numbers) > 0
+  const bugetTxt = (cols["numeric_mkr4e4qc"]?.text ?? "").trim();
+  const buget = parseNumberLoose(bugetTxt);
+  if (!bugetTxt || !Number.isFinite(buget) || buget <= 0) {
+    errors.push("Buget Client trebuie sa fie un numar > 0.");
+  }
+
+  // Moneda (status) required
+  if (!isNonEmptyText("color_mksh2abx")) errors.push("Moneda este obligatorie.");
+
+  // Tara/Localitate incarcare
+  if (!isNonEmptyText("dropdown_mkx6jyjf")) errors.push("Tara Incarcare este obligatorie.");
+  if (!isNonEmptyText("text_mkypcczr")) errors.push("Localitate Incarcare este obligatorie.");
+
+  // Tara/Localitate descarcare
+  if (!isNonEmptyText("dropdown_mkx687jv")) errors.push("Tara Descarcare este obligatorie.");
+  if (!isNonEmptyText("text_mkypxb8h")) errors.push("Localitate Descarcare este obligatorie.");
+
+  // Greutate > 0
+  const greutateTxt = (cols["text_mkt9nr81"]?.text ?? "").trim();
+  const greutate = parseNumberLoose(greutateTxt);
+  if (!greutateTxt || !Number.isFinite(greutate) || greutate <= 0) {
+    errors.push("Greutate (KG) trebuie sa fie un numar > 0.");
+  }
+
+  // Data Inc required
+  if (!isNonEmptyText("date_mkx77z0m")) errors.push("Data Inc. este obligatorie.");
+
+  // Nr zile valabile > 0
+  const zileTxt = (cols["numeric_mkypzwfe"]?.text ?? "").trim();
+  const zile = parseNumberLoose(zileTxt);
+  if (!zileTxt || !Number.isFinite(zile) || zile <= 0) {
+    errors.push("Nr. zile valabile Incarcare trebuie sa fie un numar > 0.");
+  }
+
+  // Tip Mijloc Transport required
+  if (!isNonEmptyText("dropdown_mkx1s5nv")) errors.push("Tip Mijloc Transport este obligatoriu.");
+
+  return errors;
+}
+
+// =====================
+// BUILD payload for 123cargo /loads
 // =====================
 function buildLoadPayload(cols: Record<string, MondayColumnValue>, itemId: number) {
   const errors: string[] = [];
 
-  const srcCountryRaw = (cols["dropdown_mkx6jyjf"]?.text ?? "").trim(); // Tara Incarcare (EN)
+  const srcCountryRaw = (cols["dropdown_mkx6jyjf"]?.text ?? "").trim(); // Tara Incarcare
   const srcCity = (cols["text_mkypcczr"]?.text ?? "").trim();          // Localitate Incarcare
 
-  const dstCountryRaw = (cols["dropdown_mkx687jv"]?.text ?? "").trim(); // Tara Descarcare (EN)
+  const dstCountryRaw = (cols["dropdown_mkx687jv"]?.text ?? "").trim(); // Tara Descarcare
   const dstCity = (cols["text_mkypxb8h"]?.text ?? "").trim();           // Localitate Descarcare
 
   const weightTxt = (cols["text_mkt9nr81"]?.text ?? "").trim();         // Greutate (KG)
   const loadingDate = getDateISOFromDateColumn(cols["date_mkx77z0m"]);  // Data Inc.
   const loadingIntervalTxt = (cols["numeric_mkypzwfe"]?.text ?? "").trim(); // Nr zile valabile
 
-  const transportLabel = (cols["dropdown_mkx1s5nv"]?.text ?? "").trim(); // Tip mijloc transport (RO)
+  const transportLabel = (cols["dropdown_mkx1s5nv"]?.text ?? "").trim(); // Tip mijloc transport
 
   const budgetTxt = (cols["numeric_mkr4e4qc"]?.text ?? "").trim(); // Buget client
   const currencyTxt = (cols["color_mksh2abx"]?.text ?? "").trim();  // Moneda
+
+  // Flags from optional column
+  const flagsRaw = FLAGS_COLUMN_ID ? (cols[FLAGS_COLUMN_ID]?.text ?? "").trim() : "";
+  const flags = parseFlagsFromText(flagsRaw);
 
   // required: loadingDate
   if (!loadingDate) errors.push("Data Inc. invalidă (loadingDate).");
@@ -408,37 +455,72 @@ function buildLoadPayload(cols: Record<string, MondayColumnValue>, itemId: numbe
   if (!dstCountry) errors.push(`Țara Descărcare nu se poate mapa la ISO2: '${dstCountryRaw}'`);
   if (!dstCity) errors.push("Localitate Descărcare lipsă (destination.name).");
 
-  // required: requiredTruck[]
+  // required: truck type
   const tt = mapTruckTypeFromMondayUi(transportLabel);
   if (!tt.ok) errors.push(tt.error);
 
-  // price+currency (tu le vrei incluse)
+  // price + currency
   const budget = parseNumberLoose(budgetTxt);
   if (!Number.isFinite(budget) || budget <= 0) errors.push("Buget Client invalid (offeredPrice.price).");
 
   const currency = normalizeCurrency3(currencyTxt);
   if (!currency) errors.push("Moneda invalidă (folosește RON/EUR/USD sau label mapabil).");
 
+  // requiredTruck[] (support combos + agabarit)
+  const requiredTruck: number[] = [];
+  if (tt.ok) requiredTruck.push(tt.code);
+  if (flags.agabarit) requiredTruck.push(9); // Oversized
+
+  const uniqueRequiredTruck = Array.from(new Set(requiredTruck));
+  if (uniqueRequiredTruck.length === 0) errors.push("requiredTruck invalid (gol).");
+
+  // Compose notes (including sliding floor)
+  const notes: string[] = [];
+  if (flagsRaw) notes.push(`Cerințe: ${flagsRaw}`);
+  else {
+    if (flags.slidingFloor) notes.push("Necesar: podea culisantă (sliding floor).");
+    if (flags.agabarit) notes.push("Marfă agabaritică / oversized.");
+    if (flags.adr) notes.push("ADR (hazardous).");
+    if (flags.frigo) notes.push("Frigo / temperatură controlată.");
+  }
+
+  const description = notes.length ? notes.join(" ") : "";
+
   const payload: any = {
-    // bun pentru dedup în 123cargo (dacă îl folosești)
-    externalReference: String(itemId),
+    externalReference: Number(itemId),
 
     loadingDate,
     loadingInterval: Math.trunc(loadingInterval),
-    requiredTruck: tt.ok ? [tt.code] : undefined,
+
+    requiredTruck: uniqueRequiredTruck,
+
     weight,
 
     source: srcCountry && srcCity ? { name: srcCity, country: srcCountry } : undefined,
     destination: dstCountry && dstCity ? { name: dstCity, country: dstCountry } : undefined,
 
+    // Flags that are truly supported by API
+    hazardous: flags.adr ? true : undefined,
+    temperatureControlled: flags.frigo ? true : undefined,
+
     offeredPrice: {
       price: budget,
       currency,
-      vat: true // dacă vrei altfel, adaugă coloană TVA în monday și mapează
-    }
+      vat: true,
+    },
+
+    // Text for things not supported as dedicated fields (e.g., sliding floor)
+    description: description || undefined,
+    privateNotice: undefined as string | undefined,
   };
 
-  // curăță undefined
+  // Optionally also put notes in privateNotice (or from a monday column)
+  if (PRIVATE_NOTICE_COLUMN_ID) {
+    const pn = (cols[PRIVATE_NOTICE_COLUMN_ID]?.text ?? "").trim();
+    payload.privateNotice = pn || (description ? description : undefined);
+  }
+
+  // clean undefined
   for (const k of Object.keys(payload)) {
     if (payload[k] === undefined) delete payload[k];
   }
@@ -453,9 +535,9 @@ async function postLoad(authHeader: string, payload: any) {
   const res = await axios.post(`${BURSA_BASE}/loads`, payload, {
     headers: {
       "Content-Type": "application/json",
-      "Authorization": authHeader
+      Authorization: authHeader,
     },
-    validateStatus: () => true
+    validateStatus: () => true,
   });
   return res;
 }
@@ -471,7 +553,6 @@ app.get("/health", (_, res) => res.json({ ok: true }));
 app.post("/webhooks/monday", async (req, res) => {
   const body = req.body as MondayWebhookBody;
 
-  // monday URL verification challenge
   if (body?.challenge) return res.status(200).json({ challenge: body.challenge });
 
   try {
@@ -482,11 +563,10 @@ app.post("/webhooks/monday", async (req, res) => {
     const itemId = Number(event.pulseId ?? event.itemId);
     const triggerStatusColId = event.columnId;
 
-    // citește item + coloane
     const item = await fetchItem(boardId, itemId);
     const cols = colsToMap(item.column_values);
 
-    // optional: procesezi doar dacă statusul a devenit un anumit label
+    // Optional: only process when status equals TRIGGER_ONLY_LABEL
     if (TRIGGER_ONLY_LABEL) {
       const currentLabel = getStatusLabel(cols[triggerStatusColId]);
       if (currentLabel && currentLabel !== TRIGGER_ONLY_LABEL) {
@@ -494,7 +574,7 @@ app.post("/webhooks/monday", async (req, res) => {
       }
     }
 
-    // 1) Validare reguli de business ÎNAINTE de orice altceva
+    // 1) Business rules first
     const businessErrors = validateBusinessRules(cols);
     if (businessErrors.length) {
       await changeTextColumn(boardId, itemId, ERROR_COLUMN_ID, `[BUSINESS RULES] ${businessErrors.join("; ")}`);
@@ -502,7 +582,7 @@ app.post("/webhooks/monday", async (req, res) => {
       return res.status(200).json({ ok: true });
     }
 
-    // 2) alege user pentru 123cargo (Principal > Preluat de)
+    // 2) pick user for 123cargo (Principal > Preluat de)
     const authPick = pickBasicAuthHeaderFromOwner(cols);
     if (!authPick.ok) {
       await changeTextColumn(boardId, itemId, ERROR_COLUMN_ID, `[USER] ${authPick.error}`);
@@ -510,15 +590,15 @@ app.post("/webhooks/monday", async (req, res) => {
       return res.status(200).json({ ok: true });
     }
 
-    // 3) validează coloane
-    const errors = validateRequired(cols);
-    if (errors.length) {
-      await changeTextColumn(boardId, itemId, ERROR_COLUMN_ID, `[VALIDATION] ${errors.join("; ")}`);
+    // 3) validate required
+    const validationErrors = validateRequired(cols);
+    if (validationErrors.length) {
+      await changeTextColumn(boardId, itemId, ERROR_COLUMN_ID, `[VALIDATION] ${validationErrors.join("; ")}`);
       await changeStatusLabel(boardId, itemId, triggerStatusColId, ERROR_LABEL);
       return res.status(200).json({ ok: true });
     }
 
-    // 4) mapping complet către 123cargo (/loads) + pret + currency + obligatorii
+    // 4) mapping to 123cargo (/loads)
     const { payload, errors: mapErrors } = buildLoadPayload(cols, itemId);
     if (mapErrors.length) {
       await changeTextColumn(boardId, itemId, ERROR_COLUMN_ID, `[MAPPING] ${mapErrors.join("; ")}`);
@@ -526,7 +606,7 @@ app.post("/webhooks/monday", async (req, res) => {
       return res.status(200).json({ ok: true });
     }
 
-    // 5) call 123cargo cu Basic header
+    // 5) call 123cargo
     const bursaRes = await postLoad(authPick.authHeader, payload);
     const ok = bursaRes.status === 200 && bursaRes.data?.resultCode === 0;
 
@@ -541,7 +621,7 @@ app.post("/webhooks/monday", async (req, res) => {
 
     return res.status(200).json({ ok: true });
   } catch (e: any) {
-    // răspunde 200 ca să nu intre în retry loop
+    // Return 200 to avoid monday retries
     return res.status(200).json({ ok: true, error: "internal", detail: String(e?.message ?? "") });
   }
 });
