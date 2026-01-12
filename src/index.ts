@@ -1,0 +1,551 @@
+import express from "express";
+import axios from "axios";
+import dotenv from "dotenv";
+
+import countries from "i18n-iso-countries";
+import { createRequire } from "module";
+
+const require = createRequire(import.meta.url);
+const en = require("i18n-iso-countries/langs/en.json");
+
+dotenv.config();
+countries.registerLocale(en);
+
+// =====================
+// CONFIG
+// =====================
+function reqEnv(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing env var: ${name}`);
+  return v;
+}
+
+const PORT = Number(process.env.PORT || 3000);
+
+const MONDAY_TOKEN = reqEnv("MONDAY_TOKEN");
+const BURSA_BASE = reqEnv("BURSA_BASE");
+
+const DEAL_OWNER_COLUMN_ID = reqEnv("DEAL_OWNER_COLUMN_ID"); // people column: deal_owner
+const ERROR_COLUMN_ID = reqEnv("ERROR_COLUMN_ID");
+
+const SUCCESS_LABEL = reqEnv("TRIGGER_STATUS_SUCCESS_LABEL");
+const ERROR_LABEL = reqEnv("TRIGGER_STATUS_ERROR_LABEL");
+
+const TRIGGER_ONLY_LABEL = process.env.TRIGGER_STATUS_ONLY_LABEL || "";
+
+// =====================
+// USER_MAP (Base64("user:pass"))
+// =====================
+// base64("123cargos:bursaTransport") = MTIzY2FyZ29zOmJ1cnNhVHJhbnNwb3J0
+const USER_MAP: Record<number, { basicB64: string }> = {
+  96280246: { basicB64: "cmFmYWVsLm9AY3J5c3RhbC1sb2dpc3RpY3Mtc2VydmljZXMuY29tOlRyYW5zcG9ydC4yMDI0" }
+  // adaugi restul userId-urilor monday aici...
+};
+
+// =====================
+// TYPES (minim strict)
+// =====================
+type MondayColumnValue = { id: string; text: string | null; value: string | null };
+type MondayItem = { id: string; name: string; column_values: MondayColumnValue[] };
+type MondayWebhookBody = {
+  challenge?: string;
+  event?: {
+    boardId: number;
+    pulseId?: number;
+    itemId?: number;
+    columnId: string; // status column id care a declansat
+    value?: any;
+    previousValue?: any;
+  };
+};
+
+// =====================
+// MONDAY HELPERS
+// =====================
+const MONDAY_URL = "https://api.monday.com/v2";
+
+async function mondayGql<T>(query: string, variables: any): Promise<T> {
+  const res = await axios.post(
+    MONDAY_URL,
+    { query, variables },
+    { headers: { Authorization: MONDAY_TOKEN } }
+  );
+  return res.data as T;
+}
+
+function colsToMap(columnValues: MondayColumnValue[]) {
+  return Object.fromEntries(columnValues.map((c) => [c.id, c])) as Record<string, MondayColumnValue>;
+}
+
+async function fetchItem(boardId: number, itemId: number): Promise<MondayItem> {
+  const q = `
+    query ($boardId:[Int], $itemId:[Int]) {
+      boards(ids:$boardId) {
+        items_page(limit:1, query_params:{ ids:$itemId }) {
+          items { id name column_values { id text value } }
+        }
+      }
+    }`;
+  const data: any = await mondayGql(q, { boardId, itemId });
+  const item = data?.data?.boards?.[0]?.items_page?.items?.[0];
+  if (!item) throw new Error("Item not found in monday");
+  return item as MondayItem;
+}
+
+async function changeTextColumn(boardId: number, itemId: number, columnId: string, text: string) {
+  const m = `
+    mutation ($boardId:Int!, $itemId:Int!, $colId:String!, $val:JSON!) {
+      change_column_value(board_id:$boardId, item_id:$itemId, column_id:$colId, value:$val) { id }
+    }`;
+  return mondayGql(m, { boardId, itemId, colId: columnId, val: JSON.stringify({ text }) });
+}
+
+async function changeStatusLabel(boardId: number, itemId: number, statusColId: string, label: string) {
+  const m = `
+    mutation ($boardId:Int!, $itemId:Int!, $colId:String!, $val:JSON!) {
+      change_column_value(board_id:$boardId, item_id:$itemId, column_id:$colId, value:$val) { id }
+    }`;
+  return mondayGql(m, { boardId, itemId, colId: statusColId, val: JSON.stringify({ label }) });
+}
+
+// Uneori la status ai doar index; aici încercăm să scoatem label dacă există.
+function getStatusLabel(col: MondayColumnValue | undefined): string {
+  if (!col?.value) return "";
+  try {
+    const v = JSON.parse(col.value);
+    return String(v?.label || "");
+  } catch {
+    return "";
+  }
+}
+
+// =====================
+// PEOPLE COLUMN PARSING
+// =====================
+function getFirstPersonIdFromPeopleValue(valueJson: string | null): number | null {
+  if (!valueJson) return null;
+  try {
+    const v = JSON.parse(valueJson);
+    const persons = v?.personsAndTeams;
+    if (!Array.isArray(persons) || persons.length === 0) return null;
+    return persons[0]?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// IMPORTANT: user-ul pentru 123cargo se alege din:
+// - "Principal" (deal_owner) dacă există
+// - altfel "Preluat de" (multiple_person_mkybbcca)
+function pickBasicAuthHeaderFromOwner(cols: Record<string, MondayColumnValue>) {
+  const principalId = getFirstPersonIdFromPeopleValue(cols[DEAL_OWNER_COLUMN_ID]?.value ?? null);
+  const preluatDeId = getFirstPersonIdFromPeopleValue(cols["multiple_person_mkybbcca"]?.value ?? null);
+
+  const ownerId = principalId ?? preluatDeId;
+  if (!ownerId) {
+    return {
+      ok: false as const,
+      error: `Trebuie completat fie 'Principal' (${DEAL_OWNER_COLUMN_ID}), fie 'Preluat de' (multiple_person_mkybbcca).`
+    };
+  }
+
+  const entry = USER_MAP[ownerId];
+  if (!entry?.basicB64) return { ok: false as const, error: `Owner userId not mapped: ${ownerId}` };
+
+  return { ok: true as const, ownerId, authHeader: `Basic ${entry.basicB64}` };
+}
+
+// =====================
+// BUSINESS RULES VALIDATION
+// =====================
+function validateBusinessRules(cols: Record<string, MondayColumnValue>): string[] {
+  const errors: string[] = [];
+
+  // 1) Mod Transport Principal (color_mkx12a19) trebuie să fie doar "Rutier / Road" sau "Alege!"
+  const modTransportPrincipal = (cols["color_mkx12a19"]?.text ?? "").trim();
+  if (modTransportPrincipal) {
+    const normalized = modTransportPrincipal.toLowerCase();
+    const isValid = 
+      normalized === "rutier / road" || 
+      normalized === "rutier" || 
+      normalized === "road" || 
+      normalized === "alege!" ||
+      normalized === "alege";
+    
+    if (!isValid) {
+      errors.push(`Modul de transport principal trebuie să fie «Rutier / Road» sau «Alege!», nu «${modTransportPrincipal}»`);
+    }
+  }
+
+  // 2) Tip Marfa NU are voie să fie "Deșeuri / Waste"
+  const tipMarfa = (cols["dropdown_mkx1s5nv"]?.text ?? "").trim();
+  if (tipMarfa) {
+    const normalized = tipMarfa.toLowerCase()
+      .replace(/ă/g, "a")
+      .replace(/â/g, "a")
+      .replace(/î/g, "i")
+      .replace(/ș/g, "s")
+      .replace(/ş/g, "s")
+      .replace(/ț/g, "t")
+      .replace(/ţ/g, "t");
+    
+    if (normalized.includes("deseuri") || normalized.includes("waste")) {
+      errors.push(`Tip Marfa nu poate fi «Deșeuri / Waste». Valoare curentă: «${tipMarfa}»`);
+    }
+  }
+
+  return errors;
+}
+
+// =====================
+// VALIDATORS (regulile reale)
+// =====================
+function validateRequired(cols: Record<string, MondayColumnValue>): string[] {
+  const errors: string[] = [];
+
+  const isNonEmptyText = (id: string) => (cols[id]?.text ?? "").trim().length > 0;
+  const parseNumber = (s: string) => {
+    const n = Number(String(s).replace(",", ".").trim());
+    return Number.isFinite(n) ? n : NaN;
+  };
+
+  // 1) People: Principal SAU Preluat de
+  const principalId = getFirstPersonIdFromPeopleValue(cols["deal_owner"]?.value ?? null);
+  const preluatDeId = getFirstPersonIdFromPeopleValue(cols["multiple_person_mkybbcca"]?.value ?? null);
+  if (!principalId && !preluatDeId) {
+    errors.push("Trebuie completat fie 'Principal' (deal_owner), fie 'Preluat de' (multiple_person_mkybbcca).");
+  }
+
+  // 2) Buget Client (numbers) > 0
+  const bugetTxt = (cols["numeric_mkr4e4qc"]?.text ?? "").trim();
+  const buget = parseNumber(bugetTxt);
+  if (!bugetTxt || !Number.isFinite(buget) || buget <= 0) {
+    errors.push("Buget Client (numeric_mkr4e4qc) trebuie sa fie un numar > 0.");
+  }
+
+  // 3) Moneda (status) obligatoriu
+  if (!isNonEmptyText("color_mksh2abx")) {
+    errors.push("Moneda (color_mksh2abx) este obligatorie.");
+  }
+
+  // 4) Tara/Localitate incarcare
+  if (!isNonEmptyText("dropdown_mkx6jyjf")) errors.push("Tara Incarcare (dropdown_mkx6jyjf) este obligatorie.");
+  if (!isNonEmptyText("text_mkypcczr")) errors.push("Localitate Incarcare (text_mkypcczr) este obligatorie.");
+
+  // 5) Tara/Localitate descarcare
+  if (!isNonEmptyText("dropdown_mkx687jv")) errors.push("Tara Descarcare (dropdown_mkx687jv) este obligatorie.");
+  if (!isNonEmptyText("text_mkypxb8h")) errors.push("Localitate Descarcare (text_mkypxb8h) este obligatorie.");
+
+  // 6) Greutate (KG) numeric > 0 (text)
+  const greutateTxt = (cols["text_mkt9nr81"]?.text ?? "").trim();
+  const greutate = parseNumber(greutateTxt);
+  if (!greutateTxt || !Number.isFinite(greutate) || greutate <= 0) {
+    errors.push("Greutate (KG) (text_mkt9nr81) trebuie sa fie un numar > 0.");
+  }
+
+  // 7) Data Inc. (date) obligatorie
+  if (!isNonEmptyText("date_mkx77z0m")) {
+    errors.push("Data Inc. (date_mkx77z0m) este obligatorie.");
+  }
+
+  // 8) Nr. zile valabile Incarcare (numbers) > 0
+  const zileTxt = (cols["numeric_mkypzwfe"]?.text ?? "").trim();
+  const zile = parseNumber(zileTxt);
+  if (!zileTxt || !Number.isFinite(zile) || zile <= 0) {
+    errors.push("Nr. zile valabile Incarcare (numeric_mkypzwfe) trebuie sa fie un numar > 0.");
+  }
+
+  // 9) Tip Mijloc Transport (dropdown) obligatoriu
+  if (!isNonEmptyText("dropdown_mkx1s5nv")) {
+    errors.push("Tip Mijloc Transport (dropdown_mkx1s5nv) este obligatoriu.");
+  }
+
+  return errors;
+}
+
+// =====================
+// ISO2 + Currency helpers
+// =====================
+function normalizeCountry2LetterEnglish(input: string): string | null {
+  const t = (input ?? "").trim();
+  if (!t) return null;
+
+  // deja ISO2
+  if (/^[A-Za-z]{2}$/.test(t)) return t.toUpperCase();
+
+  // library: getAlpha2Code expects name; works well with English country names
+  const iso2 = countries.getAlpha2Code(t, "en");
+  return iso2 ? iso2.toUpperCase() : null;
+}
+
+function normalizeCurrency3(input: string): string | null {
+  const raw = (input ?? "").trim();
+  if (!raw) return null;
+
+  // dacă vine direct RON/EUR/USD
+  const upper = raw.toUpperCase();
+  if (/^[A-Z]{3}$/.test(upper)) return upper;
+
+  // dacă în monday apare "Euro", "Lei", etc.
+  const norm = raw.toLowerCase();
+  const map: Record<string, string> = {
+    "euro": "EUR",
+    "eur": "EUR",
+    "lei": "RON",
+    "ron": "RON",
+    "usd": "USD",
+    "dollar": "USD",
+    "dollars": "USD"
+  };
+
+  return map[norm] ?? null;
+}
+
+// =====================
+// TruckType mapping (UI simplificat RO)
+// =====================
+const UI_RO_TO_123CARGO_TRUCKTYPE: Record<string, { code: number; apiName: string } | null> = {
+  "duba": { code: 1, apiName: "Box" },
+  "prelata": { code: 2, apiName: "Tilt" },
+  "platforma": { code: 3, apiName: "Flat" },
+  "basculanta": { code: 5, apiName: "Tipper" },
+  "cisterna": { code: 6, apiName: "Tank" },
+  "container": { code: 7, apiName: "Container" },
+  "cisterna alimentara": { code: 8, apiName: "Liquid food container" },
+  "agabaritic": { code: 9, apiName: "Oversized" },
+  "transport autoturisme": { code: 10, apiName: "Car transporter" },
+
+  // nu există truckType dedicat în 123cargo
+  "cap tractor": null
+};
+
+function normalizeRoLabel(s: string): string {
+  return (s ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/ă/g, "a")
+    .replace(/â/g, "a")
+    .replace(/î/g, "i")
+    .replace(/ș/g, "s")
+    .replace(/ş/g, "s")
+    .replace(/ț/g, "t")
+    .replace(/ţ/g, "t");
+}
+
+function mapTruckTypeFromMondayUi(labelRaw: string) {
+  const key = normalizeRoLabel(labelRaw);
+  if (!key) return { ok: false as const, error: "Tip Mijloc Transport gol." };
+
+  const mapped = UI_RO_TO_123CARGO_TRUCKTYPE[key];
+  if (mapped === undefined) {
+    return { ok: false as const, error: `Tip Mijloc Transport necunoscut: '${labelRaw}'` };
+  }
+
+  if (mapped === null) {
+    return { ok: false as const, error: `Tip Mijloc Transport '${labelRaw}' nu are corespondent valid în 123cargo.` };
+  }
+
+  return { ok: true as const, code: mapped.code, apiName: mapped.apiName };
+}
+
+function parseNumberLoose(s: string): number {
+  const n = Number(String(s ?? "").replace(",", ".").trim());
+  return Number.isFinite(n) ? n : NaN;
+}
+
+function getDateISOFromDateColumn(col: MondayColumnValue | undefined): string | null {
+  if (!col) return null;
+  if (col.value) {
+    try {
+      const v = JSON.parse(col.value);
+      if (v?.date) return String(v.date);
+    } catch {}
+  }
+  const t = (col.text ?? "").trim();
+  return t || null;
+}
+
+// =====================
+// Build payload 123cargo /loads (cu pret + currency + toate obligatorii)
+// =====================
+function buildLoadPayload(cols: Record<string, MondayColumnValue>, itemId: number) {
+  const errors: string[] = [];
+
+  const srcCountryRaw = (cols["dropdown_mkx6jyjf"]?.text ?? "").trim(); // Tara Incarcare (EN)
+  const srcCity = (cols["text_mkypcczr"]?.text ?? "").trim();          // Localitate Incarcare
+
+  const dstCountryRaw = (cols["dropdown_mkx687jv"]?.text ?? "").trim(); // Tara Descarcare (EN)
+  const dstCity = (cols["text_mkypxb8h"]?.text ?? "").trim();           // Localitate Descarcare
+
+  const weightTxt = (cols["text_mkt9nr81"]?.text ?? "").trim();         // Greutate (KG)
+  const loadingDate = getDateISOFromDateColumn(cols["date_mkx77z0m"]);  // Data Inc.
+  const loadingIntervalTxt = (cols["numeric_mkypzwfe"]?.text ?? "").trim(); // Nr zile valabile
+
+  const transportLabel = (cols["dropdown_mkx1s5nv"]?.text ?? "").trim(); // Tip mijloc transport (RO)
+
+  const budgetTxt = (cols["numeric_mkr4e4qc"]?.text ?? "").trim(); // Buget client
+  const currencyTxt = (cols["color_mksh2abx"]?.text ?? "").trim();  // Moneda
+
+  // required: loadingDate
+  if (!loadingDate) errors.push("Data Inc. invalidă (loadingDate).");
+
+  // required: loadingInterval
+  const loadingInterval = parseNumberLoose(loadingIntervalTxt);
+  if (!Number.isFinite(loadingInterval) || loadingInterval <= 0) {
+    errors.push("Nr. zile valabile Incarcare invalid (loadingInterval).");
+  }
+
+  // required: weight
+  const weight = parseNumberLoose(weightTxt);
+  if (!Number.isFinite(weight) || weight <= 0) errors.push("Greutate invalidă (weight).");
+
+  // required: place city: {name, country ISO2}
+  const srcCountry = normalizeCountry2LetterEnglish(srcCountryRaw);
+  if (!srcCountry) errors.push(`Țara Încărcare nu se poate mapa la ISO2: '${srcCountryRaw}'`);
+  if (!srcCity) errors.push("Localitate Încărcare lipsă (source.name).");
+
+  const dstCountry = normalizeCountry2LetterEnglish(dstCountryRaw);
+  if (!dstCountry) errors.push(`Țara Descărcare nu se poate mapa la ISO2: '${dstCountryRaw}'`);
+  if (!dstCity) errors.push("Localitate Descărcare lipsă (destination.name).");
+
+  // required: requiredTruck[]
+  const tt = mapTruckTypeFromMondayUi(transportLabel);
+  if (!tt.ok) errors.push(tt.error);
+
+  // price+currency (tu le vrei incluse)
+  const budget = parseNumberLoose(budgetTxt);
+  if (!Number.isFinite(budget) || budget <= 0) errors.push("Buget Client invalid (offeredPrice.price).");
+
+  const currency = normalizeCurrency3(currencyTxt);
+  if (!currency) errors.push("Moneda invalidă (folosește RON/EUR/USD sau label mapabil).");
+
+  const payload: any = {
+    // bun pentru dedup în 123cargo (dacă îl folosești)
+    externalReference: String(itemId),
+
+    loadingDate,
+    loadingInterval: Math.trunc(loadingInterval),
+    requiredTruck: tt.ok ? [tt.code] : undefined,
+    weight,
+
+    source: srcCountry && srcCity ? { name: srcCity, country: srcCountry } : undefined,
+    destination: dstCountry && dstCity ? { name: dstCity, country: dstCountry } : undefined,
+
+    offeredPrice: {
+      price: budget,
+      currency,
+      vat: true // dacă vrei altfel, adaugă coloană TVA în monday și mapează
+    }
+  };
+
+  // curăță undefined
+  for (const k of Object.keys(payload)) {
+    if (payload[k] === undefined) delete payload[k];
+  }
+
+  return { payload, errors };
+}
+
+// =====================
+// 123CARGO CALL (POST /loads)
+// =====================
+async function postLoad(authHeader: string, payload: any) {
+  const res = await axios.post(`${BURSA_BASE}/loads`, payload, {
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": authHeader
+    },
+    validateStatus: () => true
+  });
+  return res;
+}
+
+// =====================
+// EXPRESS
+// =====================
+const app = express();
+app.use(express.json());
+
+app.get("/health", (_, res) => res.json({ ok: true }));
+
+app.post("/webhooks/monday", async (req, res) => {
+  const body = req.body as MondayWebhookBody;
+
+  // monday URL verification challenge
+  if (body?.challenge) return res.status(200).json({ challenge: body.challenge });
+
+  try {
+    const event = body?.event;
+    if (!event) return res.status(200).json({ ok: true });
+
+    const boardId = Number(event.boardId);
+    const itemId = Number(event.pulseId ?? event.itemId);
+    const triggerStatusColId = event.columnId;
+
+    // citește item + coloane
+    const item = await fetchItem(boardId, itemId);
+    const cols = colsToMap(item.column_values);
+
+    // optional: procesezi doar dacă statusul a devenit un anumit label
+    if (TRIGGER_ONLY_LABEL) {
+      const currentLabel = getStatusLabel(cols[triggerStatusColId]);
+      if (currentLabel && currentLabel !== TRIGGER_ONLY_LABEL) {
+        return res.status(200).json({ ok: true, skipped: true });
+      }
+    }
+
+    // 1) Validare reguli de business ÎNAINTE de orice altceva
+    const businessErrors = validateBusinessRules(cols);
+    if (businessErrors.length) {
+      await changeTextColumn(boardId, itemId, ERROR_COLUMN_ID, `[BUSINESS RULES] ${businessErrors.join("; ")}`);
+      await changeStatusLabel(boardId, itemId, triggerStatusColId, ERROR_LABEL);
+      return res.status(200).json({ ok: true });
+    }
+
+    // 2) alege user pentru 123cargo (Principal > Preluat de)
+    const authPick = pickBasicAuthHeaderFromOwner(cols);
+    if (!authPick.ok) {
+      await changeTextColumn(boardId, itemId, ERROR_COLUMN_ID, `[USER] ${authPick.error}`);
+      await changeStatusLabel(boardId, itemId, triggerStatusColId, ERROR_LABEL);
+      return res.status(200).json({ ok: true });
+    }
+
+    // 3) validează coloane
+    const errors = validateRequired(cols);
+    if (errors.length) {
+      await changeTextColumn(boardId, itemId, ERROR_COLUMN_ID, `[VALIDATION] ${errors.join("; ")}`);
+      await changeStatusLabel(boardId, itemId, triggerStatusColId, ERROR_LABEL);
+      return res.status(200).json({ ok: true });
+    }
+
+    // 4) mapping complet către 123cargo (/loads) + pret + currency + obligatorii
+    const { payload, errors: mapErrors } = buildLoadPayload(cols, itemId);
+    if (mapErrors.length) {
+      await changeTextColumn(boardId, itemId, ERROR_COLUMN_ID, `[MAPPING] ${mapErrors.join("; ")}`);
+      await changeStatusLabel(boardId, itemId, triggerStatusColId, ERROR_LABEL);
+      return res.status(200).json({ ok: true });
+    }
+
+    // 5) call 123cargo cu Basic header
+    const bursaRes = await postLoad(authPick.authHeader, payload);
+    const ok = bursaRes.status === 200 && bursaRes.data?.resultCode === 0;
+
+    if (ok) {
+      await changeStatusLabel(boardId, itemId, triggerStatusColId, SUCCESS_LABEL);
+      await changeTextColumn(boardId, itemId, ERROR_COLUMN_ID, "");
+    } else {
+      const msg = `[123CARGO] HTTP ${bursaRes.status} - ${JSON.stringify(bursaRes.data)?.slice(0, 800)}`;
+      await changeTextColumn(boardId, itemId, ERROR_COLUMN_ID, msg);
+      await changeStatusLabel(boardId, itemId, triggerStatusColId, ERROR_LABEL);
+    }
+
+    return res.status(200).json({ ok: true });
+  } catch (e: any) {
+    // răspunde 200 ca să nu intre în retry loop
+    return res.status(200).json({ ok: true, error: "internal", detail: String(e?.message ?? "") });
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+});
