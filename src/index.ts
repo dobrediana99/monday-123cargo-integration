@@ -50,6 +50,13 @@ const PRELUAT_DE_COLUMN_ID = process.env.PRELUAT_DE_COLUMN_ID || "multiple_perso
 const FORCE_TEST_AUTH_MODE = process.env.FORCE_TEST_AUTH_MODE === "1";
 const TEST_BURSA_USERNAME = process.env.TEST_BURSA_USERNAME || "";
 const TEST_BURSA_PASSWORD = process.env.TEST_BURSA_PASSWORD || "";
+const DEFAULT_LOADING_INTERVAL_DAYS_RAW = process.env.DEFAULT_LOADING_INTERVAL_DAYS || "1";
+const DEFAULT_LOADING_INTERVAL_DAYS = Number(DEFAULT_LOADING_INTERVAL_DAYS_RAW);
+if (!Number.isFinite(DEFAULT_LOADING_INTERVAL_DAYS) || DEFAULT_LOADING_INTERVAL_DAYS <= 0) {
+  throw new Error(
+    `DEFAULT_LOADING_INTERVAL_DAYS invalid: '${DEFAULT_LOADING_INTERVAL_DAYS_RAW}'. Expected number > 0.`
+  );
+}
 
 // =====================
 // USER_MAP (Base64("user:pass"))
@@ -423,11 +430,15 @@ function validateRequired(cols: Record<string, MondayColumnValue>): string[] {
   // Data Inc required
   if (!isNonEmptyText("date_mkx77z0m")) errors.push("Data Inc. este obligatorie.");
 
-  // Nr zile valabile > 0
-  const zileTxt = (cols["numeric_mkypzwfe"]?.text ?? "").trim();
-  const zile = parseNumberLoose(zileTxt);
-  if (!zileTxt || !Number.isFinite(zile) || zile <= 0) {
-    errors.push("Nr. zile valabile Incarcare trebuie sa fie un numar > 0.");
+  // Nr zile valabile > 0 (if column exists). If the column is missing on board,
+  // payload builder will use DEFAULT_LOADING_INTERVAL_DAYS.
+  const zileCol = cols["numeric_mkypzwfe"];
+  if (zileCol) {
+    const zileTxt = (zileCol.text ?? "").trim();
+    const zile = parseNumberLoose(zileTxt);
+    if (!zileTxt || !Number.isFinite(zile) || zile <= 0) {
+      errors.push("Nr. zile valabile Incarcare trebuie sa fie un numar > 0.");
+    }
   }
 
   // Tip Mijloc Transport required
@@ -450,7 +461,8 @@ function buildLoadPayload(cols: Record<string, MondayColumnValue>, itemId: numbe
 
   const weightTxt = (cols["text_mkt9nr81"]?.text ?? "").trim();         // Greutate (KG)
   const loadingDate = getDateISOFromDateColumn(cols["date_mkx77z0m"]);  // Data Inc.
-  const loadingIntervalTxt = (cols["numeric_mkypzwfe"]?.text ?? "").trim(); // Nr zile valabile
+  const loadingIntervalCol = cols["numeric_mkypzwfe"];
+  const loadingIntervalTxt = (loadingIntervalCol?.text ?? "").trim(); // Nr zile valabile
 
   const transportLabel = (cols["dropdown_mkx1s5nv"]?.text ?? "").trim(); // Tip mijloc transport
 
@@ -465,9 +477,16 @@ function buildLoadPayload(cols: Record<string, MondayColumnValue>, itemId: numbe
   if (!loadingDate) errors.push("Data Inc. invalidă (loadingDate).");
 
   // required: loadingInterval
-  const loadingInterval = parseNumberLoose(loadingIntervalTxt);
-  if (!Number.isFinite(loadingInterval) || loadingInterval <= 0) {
-    errors.push("Nr. zile valabile Incarcare invalid (loadingInterval).");
+  let loadingInterval = DEFAULT_LOADING_INTERVAL_DAYS;
+  if (loadingIntervalCol) {
+    loadingInterval = parseNumberLoose(loadingIntervalTxt);
+    if (!Number.isFinite(loadingInterval) || loadingInterval <= 0) {
+      errors.push("Nr. zile valabile Incarcare invalid (loadingInterval).");
+    }
+  } else {
+    console.warn(
+      `[FALLBACK] item ${itemId}: coloana numeric_mkypzwfe lipseste. Folosesc DEFAULT_LOADING_INTERVAL_DAYS=${DEFAULT_LOADING_INTERVAL_DAYS}.`
+    );
   }
 
   // required: weight
@@ -590,6 +609,9 @@ app.post("/webhooks/monday", async (req, res) => {
     const boardId = Number(event.boardId);
     const itemId = Number(event.pulseId ?? event.itemId);
     const triggerStatusColId = event.columnId;
+    const scope = `[WEBHOOK board=${boardId} item=${itemId}]`;
+
+    console.log(`${scope} received for column=${triggerStatusColId}`);
 
     const item = await fetchItem(boardId, itemId);
     const cols = colsToMap(item.column_values);
@@ -598,6 +620,9 @@ app.post("/webhooks/monday", async (req, res) => {
     if (TRIGGER_ONLY_LABEL) {
       const currentLabel = getStatusLabel(cols[triggerStatusColId]);
       if (currentLabel && currentLabel !== TRIGGER_ONLY_LABEL) {
+        console.log(
+          `${scope} skipped: trigger label mismatch (current='${currentLabel}', expected='${TRIGGER_ONLY_LABEL}')`
+        );
         return res.status(200).json({ ok: true, skipped: true });
       }
     }
@@ -605,6 +630,7 @@ app.post("/webhooks/monday", async (req, res) => {
     // 1) Business rules first
     const businessErrors = validateBusinessRules(cols);
     if (businessErrors.length) {
+      console.warn(`${scope} business validation failed: ${businessErrors.join("; ")}`);
       await changeTextColumn(boardId, itemId, ERROR_COLUMN_ID, `[BUSINESS RULES] ${businessErrors.join("; ")}`);
       await changeStatusLabel(boardId, itemId, triggerStatusColId, ERROR_LABEL);
       return res.status(200).json({ ok: true });
@@ -613,6 +639,7 @@ app.post("/webhooks/monday", async (req, res) => {
     // 2) pick user for 123cargo (Principal > Preluat de)
     const authPick = pickBasicAuthHeaderFromOwner(cols);
     if (!authPick.ok) {
+      console.warn(`${scope} auth pick failed: ${authPick.error}`);
       await changeTextColumn(boardId, itemId, ERROR_COLUMN_ID, `[USER] ${authPick.error}`);
       await changeStatusLabel(boardId, itemId, triggerStatusColId, ERROR_LABEL);
       return res.status(200).json({ ok: true });
@@ -621,6 +648,7 @@ app.post("/webhooks/monday", async (req, res) => {
     // 3) validate required
     const validationErrors = validateRequired(cols);
     if (validationErrors.length) {
+      console.warn(`${scope} required validation failed: ${validationErrors.join("; ")}`);
       await changeTextColumn(boardId, itemId, ERROR_COLUMN_ID, `[VALIDATION] ${validationErrors.join("; ")}`);
       await changeStatusLabel(boardId, itemId, triggerStatusColId, ERROR_LABEL);
       return res.status(200).json({ ok: true });
@@ -629,6 +657,7 @@ app.post("/webhooks/monday", async (req, res) => {
     // 4) mapping to 123cargo (/loads)
     const { payload, errors: mapErrors } = buildLoadPayload(cols, itemId);
     if (mapErrors.length) {
+      console.warn(`${scope} mapping failed: ${mapErrors.join("; ")}`);
       await changeTextColumn(boardId, itemId, ERROR_COLUMN_ID, `[MAPPING] ${mapErrors.join("; ")}`);
       await changeStatusLabel(boardId, itemId, triggerStatusColId, ERROR_LABEL);
       return res.status(200).json({ ok: true });
@@ -639,9 +668,13 @@ app.post("/webhooks/monday", async (req, res) => {
     const ok = bursaRes.status === 200 && bursaRes.data?.resultCode === 0;
 
     if (ok) {
+      console.log(`${scope} 123cargo success`);
       await changeStatusLabel(boardId, itemId, triggerStatusColId, SUCCESS_LABEL);
       await changeTextColumn(boardId, itemId, ERROR_COLUMN_ID, "");
     } else {
+      console.warn(
+        `${scope} 123cargo failed: HTTP ${bursaRes.status} body=${JSON.stringify(bursaRes.data)?.slice(0, 800)}`
+      );
       const msg = `[123CARGO] HTTP ${bursaRes.status} - ${JSON.stringify(bursaRes.data)?.slice(0, 800)}`;
       await changeTextColumn(boardId, itemId, ERROR_COLUMN_ID, msg);
       await changeStatusLabel(boardId, itemId, triggerStatusColId, ERROR_LABEL);
@@ -650,6 +683,7 @@ app.post("/webhooks/monday", async (req, res) => {
     return res.status(200).json({ ok: true });
   } catch (e: any) {
     // Return 200 to avoid monday retries
+    console.error(`[WEBHOOK] internal error: ${String(e?.message ?? "")}`);
     return res.status(200).json({ ok: true, error: "internal", detail: String(e?.message ?? "") });
   }
 });

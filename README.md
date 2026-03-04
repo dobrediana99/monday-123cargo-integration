@@ -99,6 +99,7 @@ ERROR_COLUMN_ID=text_mkyp9v8d
 TRIGGER_STATUS_SUCCESS_LABEL=Publicata
 TRIGGER_STATUS_ERROR_LABEL=Eroare
 TRIGGER_STATUS_ONLY_LABEL=De publicat pe bursa
+DEFAULT_LOADING_INTERVAL_DAYS=1
 
 # Optional test mode (ignora Principal/Preluat de pentru autentificare)
 FORCE_TEST_AUTH_MODE=0
@@ -137,6 +138,16 @@ TEST_BURSA_PASSWORD=parola
 - autentificarea nu mai folosește `USER_MAP`
 - validarea pentru people columns este sărită
 - restul validărilor/mapping-urilor rămân active
+
+### Fallback pentru `Nr. zile valabile Incarcare`
+
+Dacă board-ul nu are coloana `numeric_mkypzwfe`, integrarea folosește automat:
+
+```env
+DEFAULT_LOADING_INTERVAL_DAYS=1
+```
+
+Poți schimba valoarea din env (număr > 0).
 
 ## Instalare și Rulare
 
