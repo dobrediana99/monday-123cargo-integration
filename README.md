@@ -99,6 +99,11 @@ ERROR_COLUMN_ID=text_mkyp9v8d
 TRIGGER_STATUS_SUCCESS_LABEL=Publicata
 TRIGGER_STATUS_ERROR_LABEL=Eroare
 TRIGGER_STATUS_ONLY_LABEL=De publicat pe bursa
+
+# Optional test mode (ignora Principal/Preluat de pentru autentificare)
+FORCE_TEST_AUTH_MODE=0
+TEST_BURSA_USERNAME=
+TEST_BURSA_PASSWORD=
 ```
 
 ### User Mapping (în cod)
@@ -117,6 +122,21 @@ Pentru a adăuga un nou utilizator:
 1. Obține Monday `userId` din coloana People
 2. Generează Basic Auth: `echo -n "username:password" | base64`
 3. Adaugă în `USER_MAP`
+
+### Mod test (override autentificare)
+
+Pentru test rapid, poți forța aplicația să posteze pe un singur cont Bursa (indiferent de `Principal` / `Preluat de`):
+
+```env
+FORCE_TEST_AUTH_MODE=1
+TEST_BURSA_USERNAME=utilizator@firma.com
+TEST_BURSA_PASSWORD=parola
+```
+
+În acest mod:
+- autentificarea nu mai folosește `USER_MAP`
+- validarea pentru people columns este sărită
+- restul validărilor/mapping-urilor rămân active
 
 ## Instalare și Rulare
 
