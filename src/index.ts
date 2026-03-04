@@ -133,10 +133,10 @@ async function fetchItem(boardId: string, itemId: string): Promise<MondayItem> {
 
 async function changeTextColumn(boardId: string, itemId: string, columnId: string, text: string) {
   const m = `
-    mutation ($boardId:ID!, $itemId:ID!, $colId:String!, $val:JSON!) {
-      change_column_value(board_id:$boardId, item_id:$itemId, column_id:$colId, value:$val) { id }
+    mutation ($boardId:ID!, $itemId:ID!, $colId:String!, $val:String!) {
+      change_simple_column_value(board_id:$boardId, item_id:$itemId, column_id:$colId, value:$val) { id }
     }`;
-  return mondayGql(m, { boardId, itemId, colId: columnId, val: JSON.stringify({ text }) });
+  return mondayGql(m, { boardId, itemId, colId: columnId, val: text });
 }
 
 async function changeStatusLabel(boardId: string, itemId: string, statusColId: string, label: string) {
