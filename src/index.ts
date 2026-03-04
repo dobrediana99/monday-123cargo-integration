@@ -75,12 +75,14 @@ const USER_MAP: Record<number, { basicB64: string }> = {
 // =====================
 type MondayColumnValue = { id: string; text: string | null; value: string | null };
 type MondayItem = { id: string; name: string; column_values: MondayColumnValue[] };
+type MondayGraphQLError = { message?: string };
+type MondayGraphQLResponse<T> = { data?: T; errors?: MondayGraphQLError[] };
 type MondayWebhookBody = {
   challenge?: string;
   event?: {
-    boardId: number;
-    pulseId?: number;
-    itemId?: number;
+    boardId: number | string;
+    pulseId?: number | string;
+    itemId?: number | string;
     columnId: string;
     value?: any;
     previousValue?: any;
@@ -98,39 +100,48 @@ async function mondayGql<T>(query: string, variables: any): Promise<T> {
     { query, variables },
     { headers: { Authorization: MONDAY_TOKEN } }
   );
-  return res.data as T;
+
+  const body = res.data as MondayGraphQLResponse<T>;
+  if (Array.isArray(body?.errors) && body.errors.length > 0) {
+    const messages = body.errors.map((e) => e?.message || "Unknown Monday error").join(" | ");
+    throw new Error(`Monday GraphQL error: ${messages}`);
+  }
+  if (!body?.data) {
+    throw new Error("Monday GraphQL error: missing data");
+  }
+  return body.data;
 }
 
 function colsToMap(columnValues: MondayColumnValue[]) {
   return Object.fromEntries(columnValues.map((c) => [c.id, c])) as Record<string, MondayColumnValue>;
 }
 
-async function fetchItem(boardId: number, itemId: number): Promise<MondayItem> {
+async function fetchItem(boardId: string, itemId: string): Promise<MondayItem> {
   const q = `
-    query ($boardId:[Int], $itemId:[Int]) {
+    query ($boardId:[ID!], $itemId:[ID!]) {
       boards(ids:$boardId) {
         items_page(limit:1, query_params:{ ids:$itemId }) {
           items { id name column_values { id text value } }
         }
       }
     }`;
-  const data: any = await mondayGql(q, { boardId, itemId });
-  const item = data?.data?.boards?.[0]?.items_page?.items?.[0];
+  const data: any = await mondayGql(q, { boardId: [boardId], itemId: [itemId] });
+  const item = data?.boards?.[0]?.items_page?.items?.[0];
   if (!item) throw new Error("Item not found in monday");
   return item as MondayItem;
 }
 
-async function changeTextColumn(boardId: number, itemId: number, columnId: string, text: string) {
+async function changeTextColumn(boardId: string, itemId: string, columnId: string, text: string) {
   const m = `
-    mutation ($boardId:Int!, $itemId:Int!, $colId:String!, $val:JSON!) {
+    mutation ($boardId:ID!, $itemId:ID!, $colId:String!, $val:JSON!) {
       change_column_value(board_id:$boardId, item_id:$itemId, column_id:$colId, value:$val) { id }
     }`;
   return mondayGql(m, { boardId, itemId, colId: columnId, val: JSON.stringify({ text }) });
 }
 
-async function changeStatusLabel(boardId: number, itemId: number, statusColId: string, label: string) {
+async function changeStatusLabel(boardId: string, itemId: string, statusColId: string, label: string) {
   const m = `
-    mutation ($boardId:Int!, $itemId:Int!, $colId:String!, $val:JSON!) {
+    mutation ($boardId:ID!, $itemId:ID!, $colId:String!, $val:JSON!) {
       change_column_value(board_id:$boardId, item_id:$itemId, column_id:$colId, value:$val) { id }
     }`;
   return mondayGql(m, { boardId, itemId, colId: statusColId, val: JSON.stringify({ label }) });
@@ -450,7 +461,7 @@ function validateRequired(cols: Record<string, MondayColumnValue>): string[] {
 // =====================
 // BUILD payload for 123cargo /loads
 // =====================
-function buildLoadPayload(cols: Record<string, MondayColumnValue>, itemId: number) {
+function buildLoadPayload(cols: Record<string, MondayColumnValue>, itemId: string) {
   const errors: string[] = [];
 
   const srcCountryRaw = (cols["dropdown_mkx6jyjf"]?.text ?? "").trim(); // Tara Incarcare
@@ -533,8 +544,10 @@ function buildLoadPayload(cols: Record<string, MondayColumnValue>, itemId: numbe
 
   const description = notes.length ? notes.join(" ") : "";
 
+  const externalReference = Number.parseInt(itemId, 10);
+
   const payload: any = {
-    externalReference: Number(itemId),
+    externalReference: Number.isFinite(externalReference) ? externalReference : undefined,
 
     loadingDate,
     loadingInterval: Math.trunc(loadingInterval),
@@ -606,9 +619,19 @@ app.post("/webhooks/monday", async (req, res) => {
     const event = body?.event;
     if (!event) return res.status(200).json({ ok: true });
 
-    const boardId = Number(event.boardId);
-    const itemId = Number(event.pulseId ?? event.itemId);
-    const triggerStatusColId = event.columnId;
+    const boardIdRaw = event.boardId;
+    const itemIdRaw = event.pulseId ?? event.itemId;
+    const triggerStatusColId = String(event.columnId ?? "");
+    if (boardIdRaw === undefined || boardIdRaw === null || itemIdRaw === undefined || itemIdRaw === null) {
+      console.warn("[WEBHOOK] missing boardId/itemId in event payload");
+      return res.status(200).json({ ok: true, skipped: true });
+    }
+    if (!triggerStatusColId) {
+      console.warn("[WEBHOOK] missing columnId in event payload");
+      return res.status(200).json({ ok: true, skipped: true });
+    }
+    const boardId = String(boardIdRaw);
+    const itemId = String(itemIdRaw);
     const scope = `[WEBHOOK board=${boardId} item=${itemId}]`;
 
     console.log(`${scope} received for column=${triggerStatusColId}`);
