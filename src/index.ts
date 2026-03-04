@@ -45,6 +45,12 @@ const PRIVATE_NOTICE_COLUMN_ID = process.env.PRIVATE_NOTICE_COLUMN_ID || "";
 // Optional: second people column used in your logic ("Preluat de")
 const PRELUAT_DE_COLUMN_ID = process.env.PRELUAT_DE_COLUMN_ID || "multiple_person_mkybbcca";
 
+// Optional: test override mode. When enabled, posts always use this fixed Bursa account
+// and user columns (Principal / Preluat de) are ignored for auth checks.
+const FORCE_TEST_AUTH_MODE = process.env.FORCE_TEST_AUTH_MODE === "1";
+const TEST_BURSA_USERNAME = process.env.TEST_BURSA_USERNAME || "";
+const TEST_BURSA_PASSWORD = process.env.TEST_BURSA_PASSWORD || "";
+
 // =====================
 // USER_MAP (Base64("user:pass"))
 // =====================
@@ -148,7 +154,27 @@ function getFirstPersonIdFromPeopleValue(valueJson: string | null): number | nul
   }
 }
 
+function buildBasicAuthHeader(username: string, password: string): string {
+  return `Basic ${Buffer.from(`${username}:${password}`, "utf8").toString("base64")}`;
+}
+
 function pickBasicAuthHeaderFromOwner(cols: Record<string, MondayColumnValue>) {
+  if (FORCE_TEST_AUTH_MODE) {
+    if (!TEST_BURSA_USERNAME || !TEST_BURSA_PASSWORD) {
+      return {
+        ok: false as const,
+        error:
+          "FORCE_TEST_AUTH_MODE este activ, dar lipsesc TEST_BURSA_USERNAME / TEST_BURSA_PASSWORD din env.",
+      };
+    }
+
+    return {
+      ok: true as const,
+      ownerId: -1,
+      authHeader: buildBasicAuthHeader(TEST_BURSA_USERNAME, TEST_BURSA_PASSWORD),
+    };
+  }
+
   const principalId = getFirstPersonIdFromPeopleValue(cols[DEAL_OWNER_COLUMN_ID]?.value ?? null);
   const preluatDeId = getFirstPersonIdFromPeopleValue(cols[PRELUAT_DE_COLUMN_ID]?.value ?? null);
 
@@ -360,11 +386,13 @@ function validateRequired(cols: Record<string, MondayColumnValue>): string[] {
 
   const isNonEmptyText = (id: string) => (cols[id]?.text ?? "").trim().length > 0;
 
-  // People: Principal OR Preluat de
-  const principalId = getFirstPersonIdFromPeopleValue(cols[DEAL_OWNER_COLUMN_ID]?.value ?? null);
-  const preluatDeId = getFirstPersonIdFromPeopleValue(cols[PRELUAT_DE_COLUMN_ID]?.value ?? null);
-  if (!principalId && !preluatDeId) {
-    errors.push("Trebuie completat fie 'Principal', fie 'Preluat de'.");
+  // People check is skipped only in explicit test override mode.
+  if (!FORCE_TEST_AUTH_MODE) {
+    const principalId = getFirstPersonIdFromPeopleValue(cols[DEAL_OWNER_COLUMN_ID]?.value ?? null);
+    const preluatDeId = getFirstPersonIdFromPeopleValue(cols[PRELUAT_DE_COLUMN_ID]?.value ?? null);
+    if (!principalId && !preluatDeId) {
+      errors.push("Trebuie completat fie 'Principal', fie 'Preluat de'.");
+    }
   }
 
   // Buget Client (numbers) > 0
