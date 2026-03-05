@@ -100,6 +100,8 @@ TRIGGER_STATUS_SUCCESS_LABEL=Publicata
 TRIGGER_STATUS_ERROR_LABEL=Eroare
 TRIGGER_STATUS_ONLY_LABEL=De publicat pe bursa
 DEFAULT_LOADING_INTERVAL_DAYS=1
+APP_BASE_URL=https://monday-123cargo-integration.onrender.com
+TWO_STEP_TICKET_TTL_SECONDS=900
 
 # Optional test mode (ignora Principal/Preluat de pentru autentificare)
 FORCE_TEST_AUTH_MODE=0
@@ -198,6 +200,17 @@ POST /webhooks/monday
 
 Primește webhook-uri de la Monday.com când se schimbă statusul unui item.
 
+### Confirmare 2-step Bursa (UI)
+
+```
+GET /2step?t=<ticketId>
+POST /2step
+POST /internal/2step/confirm
+```
+
+Când Bursa răspunde cu `409 - 2 step authentication required`, integrarea scrie în Monday un link `/2step` în coloana de eroare.
+Utilizatorul deschide link-ul, introduce codul SMS, iar aplicația reia automat publicarea.
+
 ## Tipuri de Erori
 
 Toate erorile sunt scrise în coloana de eroare din Monday cu un prefix:
@@ -207,6 +220,7 @@ Toate erorile sunt scrise în coloana de eroare din Monday cu un prefix:
 - `[VALIDATION]` - Coloane obligatorii necompletate sau invalide
 - `[MAPPING]` - Erori la maparea datelor către 123cargo (țări, transport, etc.)
 - `[123CARGO]` - Eroare la trimiterea către API 123cargo
+- `[2STEP]` - Este necesar cod SMS pentru autentificare Bursa
 
 ## Exemple de Erori
 
