@@ -199,14 +199,45 @@ function isTwoStepRequiredResponse(status: number, data: any): boolean {
   return txt.includes("2 step authentication required");
 }
 
+function normalizeTwoStepCookieValue(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  let s = raw.trim();
+  if (!s) return null;
+
+  // Remove wrapping quotes if present.
+  s = s.replace(/^"+|"+$/g, "").trim();
+
+  // Expected explicit cookie name in response/header.
+  const named = s.match(/Bursa-2step-authentication\s*=\s*([^;,\s]+)/i);
+  if (named?.[1]) return named[1].trim();
+
+  // Generic "key=value; ..." cookie form.
+  const firstPart = s.split(";")[0]?.trim() || "";
+  const eqIndex = firstPart.indexOf("=");
+  if (eqIndex > 0) {
+    const key = firstPart.slice(0, eqIndex).trim();
+    const value = firstPart.slice(eqIndex + 1).trim();
+    if (/bursa-2step-authentication/i.test(key) && value) return value;
+  }
+
+  // If API returns only the value itself.
+  if (/^[^\s;]+$/.test(s)) return s;
+  return null;
+}
+
 function extractTwoStepCookie(data: any, setCookieHeader: unknown): string | null {
-  const fromResponse =
-    typeof data?.response === "string"
-      ? data.response.trim()
-      : typeof data?.response?.cookie === "string"
-        ? String(data.response.cookie).trim()
-        : null;
-  if (fromResponse) return fromResponse;
+  const candidates: unknown[] = [
+    data?.response,
+    data?.response?.cookie,
+    data?.response?.value,
+    data?.response?.["Bursa-2step-authentication"],
+    data?.["Bursa-2step-authentication"],
+    data?.cookie,
+  ];
+  for (const c of candidates) {
+    const normalized = normalizeTwoStepCookieValue(c);
+    if (normalized) return normalized;
+  }
 
   const setCookie = Array.isArray(setCookieHeader)
     ? setCookieHeader
@@ -214,8 +245,8 @@ function extractTwoStepCookie(data: any, setCookieHeader: unknown): string | nul
       ? [setCookieHeader]
       : [];
   for (const c of setCookie) {
-    const m = String(c).match(/Bursa-2step-authentication=([^;]+)/i);
-    if (m?.[1]) return m[1];
+    const normalized = normalizeTwoStepCookieValue(String(c));
+    if (normalized) return normalized;
   }
   return null;
 }
@@ -765,6 +796,11 @@ async function processTwoStepTicket(ticketId: string, code: string) {
 
   const cookie = extractTwoStepCookie(authRes.data, authRes.headers?.["set-cookie"]);
   if (!cookie) {
+    const headerKeys = Object.keys(authRes.headers || {});
+    const bodyPreview = JSON.stringify(authRes.data)?.slice(0, 800) || "";
+    console.warn(
+      `[2STEP] Cookie missing after login/login. status=${authRes.status} headerKeys=${headerKeys.join(",")} body=${bodyPreview}`
+    );
     return {
       ok: false as const,
       message: "2-step validat, dar nu am primit cookie Bursa-2step-authentication.",
