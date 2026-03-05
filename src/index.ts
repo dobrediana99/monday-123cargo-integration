@@ -193,6 +193,13 @@ function buildTwoStepUrl(req: express.Request, ticketId: string): string {
   return `${base.replace(/\/+$/, "")}/2step?t=${encodeURIComponent(ticketId)}`;
 }
 
+function buildTwoStepMondayMessage(link: string): string {
+  // target="_blank" asks browser to open in a new tab/window.
+  // Keep plain URL fallback because some Monday text cells may not render HTML links.
+  const html = `Trebuie sa introduci codul primit in email: <a href="${link}" target="_blank" rel="noopener noreferrer">AICI</a>`;
+  return toDisplayMessage(`${html}\nDaca linkul nu este clickabil, foloseste acest URL: ${link}`);
+}
+
 function isTwoStepRequiredResponse(status: number, data: any): boolean {
   if (status === 409) return true;
   const txt = String(data?.response ?? "").toLowerCase();
@@ -1050,7 +1057,7 @@ app.post("/webhooks/monday", async (req, res) => {
       };
       twoStepTickets.set(ticketId, ticket);
       const link = buildTwoStepUrl(req, ticketId);
-      const msg = toDisplayMessage(`[2STEP] Bursa solicită cod SMS. Continuă aici: ${link}`);
+      const msg = buildTwoStepMondayMessage(link);
       console.warn(`${scope} 2step required, ticket=${ticketId}`);
       await changeTextColumn(boardId, itemId, ERROR_COLUMN_ID, msg);
       await changeStatusLabel(boardId, itemId, triggerStatusColId, ERROR_LABEL);
