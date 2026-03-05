@@ -194,10 +194,12 @@ function buildTwoStepUrl(req: express.Request, ticketId: string): string {
 }
 
 function buildTwoStepMondayMessage(link: string): string {
-  // target="_blank" asks browser to open in a new tab/window.
-  // Keep plain URL fallback because some Monday text cells may not render HTML links.
-  const html = `Trebuie sa introduci codul primit in email: <a href="${link}" target="_blank" rel="noopener noreferrer">AICI</a>`;
-  return toDisplayMessage(`${html}\nDaca linkul nu este clickabil, foloseste acest URL: ${link}`);
+  // Monday text columns display plain text; HTML anchors are rendered literally.
+  // Keep a direct URL so the UI can auto-detect it as a clickable link.
+  return toDisplayMessage(
+    `Trebuie sa introduci codul primit in email: AICI -> ${link}\n` +
+      `Daca nu se deschide direct, copiaza URL-ul in browser.`
+  );
 }
 
 function isTwoStepRequiredResponse(status: number, data: any): boolean {
