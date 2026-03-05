@@ -102,6 +102,7 @@ TRIGGER_STATUS_ONLY_LABEL=De publicat pe bursa
 DEFAULT_LOADING_INTERVAL_DAYS=1
 APP_BASE_URL=https://monday-123cargo-integration.onrender.com
 TWO_STEP_TICKET_TTL_SECONDS=900
+TWO_STEP_LINK_COLUMN_ID=
 
 # Optional test mode (ignora Principal/Preluat de pentru autentificare)
 FORCE_TEST_AUTH_MODE=0
@@ -210,6 +211,11 @@ POST /internal/2step/confirm
 
 Când Bursa răspunde cu `409 - 2 step authentication required`, integrarea scrie în Monday un link `/2step` în coloana de eroare.
 Utilizatorul deschide link-ul, introduce codul SMS, iar aplicația reia automat publicarea.
+
+Pentru UX cu text exact **AICI** clickabil:
+- adaugă în board o coloană de tip **Link** (ex: "2step link")
+- setează `TWO_STEP_LINK_COLUMN_ID=<id_coloana_link>`
+- integrarea va scrie în acea coloană textul `AICI` + URL-ul paginii de confirmare
 
 ## Tipuri de Erori
 
