@@ -345,6 +345,65 @@ function getDateISOFromDateColumn(col: MondayColumnValue | undefined): string | 
   return t || null;
 }
 
+function parseDateFlexible(raw: string): Date | null {
+  const t = (raw ?? "").trim();
+  if (!t) return null;
+
+  let y = 0;
+  let m = 0;
+  let d = 0;
+
+  const iso = t.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) {
+    y = Number(iso[1]);
+    m = Number(iso[2]);
+    d = Number(iso[3]);
+  } else {
+    const ro = t.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+    if (!ro) return null;
+    d = Number(ro[1]);
+    m = Number(ro[2]);
+    y = Number(ro[3]);
+  }
+
+  if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) return null;
+  if (y < 2000 || m < 1 || m > 12 || d < 1 || d > 31) return null;
+
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (
+    dt.getUTCFullYear() !== y ||
+    dt.getUTCMonth() !== m - 1 ||
+    dt.getUTCDate() !== d
+  ) {
+    return null;
+  }
+  return dt;
+}
+
+function formatDateDdMmYyyy(dt: Date): string {
+  const dd = String(dt.getUTCDate()).padStart(2, "0");
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+  const yyyy = String(dt.getUTCFullYear());
+  return `${dd}-${mm}-${yyyy}`;
+}
+
+function toBursaDate(raw: string | null): string | null {
+  if (!raw) return null;
+  const dt = parseDateFlexible(raw);
+  if (!dt) return null;
+  return formatDateDdMmYyyy(dt);
+}
+
+function isWithin30DaysOfToday(rawBursaDate: string): boolean {
+  const dt = parseDateFlexible(rawBursaDate);
+  if (!dt) return false;
+  const now = new Date();
+  const todayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const diffMs = dt.getTime() - todayUtc.getTime();
+  const diffDays = Math.abs(diffMs / (24 * 60 * 60 * 1000));
+  return diffDays <= 30;
+}
+
 function normalizeCountry2LetterEnglish(input: string): string | null {
   const t = (input ?? "").trim();
   if (!t) return null;
@@ -611,7 +670,8 @@ function buildLoadPayload(cols: Record<string, MondayColumnValue>, itemId: strin
   const dstCity = (cols["text_mkypxb8h"]?.text ?? "").trim();           // Localitate Descarcare
 
   const weightTxt = (cols["text_mkt9nr81"]?.text ?? "").trim();         // Greutate (KG)
-  const loadingDate = getDateISOFromDateColumn(cols["date_mkx77z0m"]);  // Data Inc.
+  const loadingDateRaw = getDateISOFromDateColumn(cols["date_mkx77z0m"]);  // Data Inc.
+  const loadingDate = toBursaDate(loadingDateRaw);
   const loadingIntervalCol = cols["numeric_mkypzwfe"];
   const loadingIntervalTxt = (loadingIntervalCol?.text ?? "").trim(); // Nr zile valabile
 
@@ -625,7 +685,11 @@ function buildLoadPayload(cols: Record<string, MondayColumnValue>, itemId: strin
   const flags = parseFlagsFromText(flagsRaw);
 
   // required: loadingDate
-  if (!loadingDate) errors.push("Data Inc. invalidă (loadingDate).");
+  if (!loadingDate) {
+    errors.push(`Data Inc. invalidă (loadingDate). Format acceptat: YYYY-MM-DD sau DD-MM-YYYY.`);
+  } else if (!isWithin30DaysOfToday(loadingDate)) {
+    errors.push("Data Inc. trebuie să fie în intervalul de 30 zile față de data curentă (cerință BursaTransport).");
+  }
 
   // required: loadingInterval
   let loadingInterval = DEFAULT_LOADING_INTERVAL_DAYS;
