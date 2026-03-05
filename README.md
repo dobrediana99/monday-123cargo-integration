@@ -98,11 +98,14 @@ DEAL_OWNER_COLUMN_ID=deal_owner
 ERROR_COLUMN_ID=text_mkyp9v8d
 TRIGGER_STATUS_SUCCESS_LABEL=Publicata
 TRIGGER_STATUS_ERROR_LABEL=Eroare
+TRIGGER_STATUS_PROCESSING_LABEL=Procesare
 TRIGGER_STATUS_ONLY_LABEL=De publicat pe bursa
 DEFAULT_LOADING_INTERVAL_DAYS=1
 APP_BASE_URL=https://monday-123cargo-integration.onrender.com
 TWO_STEP_TICKET_TTL_SECONDS=900
 TWO_STEP_LINK_COLUMN_ID=
+TIP_MARFA_COLUMN_ID=color_mksemxby
+OCUPARE_CAMION_COLUMN_ID=color_mkrb3hhk
 
 # Optional test mode (ignora Principal/Preluat de pentru autentificare)
 FORCE_TEST_AUTH_MODE=0

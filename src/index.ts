@@ -32,6 +32,7 @@ const ERROR_COLUMN_ID = reqEnv("ERROR_COLUMN_ID");           // Text column to w
 
 const SUCCESS_LABEL = reqEnv("TRIGGER_STATUS_SUCCESS_LABEL");
 const ERROR_LABEL = reqEnv("TRIGGER_STATUS_ERROR_LABEL");
+const PROCESSING_LABEL = process.env.TRIGGER_STATUS_PROCESSING_LABEL || "Procesare";
 
 // Optional: process webhook only when status becomes this label
 const TRIGGER_ONLY_LABEL = process.env.TRIGGER_STATUS_ONLY_LABEL || "";
@@ -42,6 +43,8 @@ const FLAGS_COLUMN_ID = process.env.FLAGS_COLUMN_ID || ""; // e.g. "dropdown_xxx
 
 // Optional: private notes column (if you want to include flags there too)
 const PRIVATE_NOTICE_COLUMN_ID = process.env.PRIVATE_NOTICE_COLUMN_ID || "";
+const TIP_MARFA_COLUMN_ID = process.env.TIP_MARFA_COLUMN_ID || "color_mksemxby";
+const OCUPARE_CAMION_COLUMN_ID = process.env.OCUPARE_CAMION_COLUMN_ID || "color_mkrb3hhk";
 
 // Optional: second people column used in your logic ("Preluat de")
 const PRELUAT_DE_COLUMN_ID = process.env.PRELUAT_DE_COLUMN_ID || "multiple_person_mkybbcca";
@@ -460,6 +463,13 @@ type LoadFlags = {
   slidingFloor: boolean;
 };
 
+type CargoTypeFlags = {
+  hazardous: boolean;
+  temperatureControlled: boolean;
+  oversized: boolean;
+  carTransport: boolean;
+};
+
 function parseFlagsFromText(raw: string): LoadFlags {
   const t = normalizeRoLabel(raw);
 
@@ -476,6 +486,42 @@ function parseFlagsFromText(raw: string): LoadFlags {
     t.includes("podea culisanta") || t.includes("sliding floor") || t.includes("walking floor");
 
   return { adr, frigo, agabarit, slidingFloor };
+}
+
+function parseCargoTypeFromStatus(labelRaw: string) {
+  const key = normalizeRoLabel(labelRaw);
+  if (!key || key === "alege!" || key === "alege") {
+    return {
+      ok: true as const,
+      flags: { hazardous: false, temperatureControlled: false, oversized: false, carTransport: false } as CargoTypeFlags,
+    };
+  }
+
+  const map: Record<string, CargoTypeFlags | null> = {
+    frigo: { hazardous: false, temperatureControlled: true, oversized: false, carTransport: false },
+    oversized: { hazardous: false, temperatureControlled: false, oversized: true, carTransport: false },
+    adr: { hazardous: true, temperatureControlled: false, oversized: false, carTransport: false },
+    "general goods": { hazardous: false, temperatureControlled: false, oversized: false, carTransport: false },
+    car: { hazardous: false, temperatureControlled: false, oversized: false, carTransport: true },
+    waste: null, // blocked by business rule
+  };
+
+  const mapped = map[key];
+  if (mapped === undefined) {
+    return { ok: false as const, error: `Tip Marfa necunoscut: '${labelRaw}'` };
+  }
+  if (mapped === null) {
+    return { ok: false as const, error: `Tip Marfa '${labelRaw}' nu este permis pentru publicare.` };
+  }
+  return { ok: true as const, flags: mapped };
+}
+
+function mapGroupageFromOcupareCamion(labelRaw: string) {
+  const key = normalizeRoLabel(labelRaw);
+  if (!key || key === "alege!" || key === "alege") return { ok: true as const, value: undefined as boolean | undefined };
+  if (key === "groupage ltl") return { ok: true as const, value: true };
+  if (key === "complete ftl") return { ok: true as const, value: false };
+  return { ok: false as const, error: `Ocupare Camion necunoscută: '${labelRaw}'` };
 }
 
 // =====================
@@ -600,8 +646,8 @@ function validateBusinessRules(cols: Record<string, MondayColumnValue>): string[
     }
   }
 
-  // 2) Tip Marfa must NOT be "Deșeuri / Waste"
-  const tipMarfa = (cols["dropdown_mkx1s5nv"]?.text ?? "").trim();
+  // 2) Tip Marfa must NOT be "Waste"
+  const tipMarfa = (cols[TIP_MARFA_COLUMN_ID]?.text ?? "").trim();
   if (tipMarfa) {
     const normalized = normalizeRoLabel(tipMarfa);
     if (normalized.includes("deseuri") || normalized.includes("waste")) {
@@ -693,6 +739,8 @@ function buildLoadPayload(cols: Record<string, MondayColumnValue>, itemId: strin
   const loadingIntervalTxt = (loadingIntervalCol?.text ?? "").trim(); // Nr zile valabile
 
   const transportLabel = (cols["dropdown_mkx1s5nv"]?.text ?? "").trim(); // Tip mijloc transport
+  const tipMarfaLabel = (cols[TIP_MARFA_COLUMN_ID]?.text ?? "").trim(); // Tip Marfa (status)
+  const ocupareCamionLabel = (cols[OCUPARE_CAMION_COLUMN_ID]?.text ?? "").trim(); // Ocupare Camion (status)
 
   const budgetTxt = (cols["numeric_mkr4e4qc"]?.text ?? "").trim(); // Buget client
   const currencyTxt = (cols["color_mksh2abx"]?.text ?? "").trim();  // Moneda
@@ -738,6 +786,12 @@ function buildLoadPayload(cols: Record<string, MondayColumnValue>, itemId: strin
   const tt = mapTruckTypeFromMondayUi(transportLabel);
   if (!tt.ok) errors.push(tt.error);
 
+  const tipMarfa = parseCargoTypeFromStatus(tipMarfaLabel);
+  if (!tipMarfa.ok) errors.push(tipMarfa.error);
+
+  const ocupareCamion = mapGroupageFromOcupareCamion(ocupareCamionLabel);
+  if (!ocupareCamion.ok) errors.push(ocupareCamion.error);
+
   // price + currency
   const budget = parseNumberLoose(budgetTxt);
   if (!Number.isFinite(budget) || budget <= 0) errors.push("Buget Client invalid (offeredPrice.price).");
@@ -749,6 +803,8 @@ function buildLoadPayload(cols: Record<string, MondayColumnValue>, itemId: strin
   const requiredTruck: number[] = [];
   if (tt.ok) requiredTruck.push(tt.code);
   if (flags.agabarit) requiredTruck.push(9); // Oversized
+  if (tipMarfa.ok && tipMarfa.flags.oversized) requiredTruck.push(9);
+  if (tipMarfa.ok && tipMarfa.flags.carTransport) requiredTruck.push(10);
 
   const uniqueRequiredTruck = Array.from(new Set(requiredTruck));
   if (uniqueRequiredTruck.length === 0) errors.push("requiredTruck invalid (gol).");
@@ -781,8 +837,9 @@ function buildLoadPayload(cols: Record<string, MondayColumnValue>, itemId: strin
     destination: dstCountry && dstCity ? { name: dstCity, country: dstCountry } : undefined,
 
     // Flags that are truly supported by API
-    hazardous: flags.adr ? true : undefined,
-    temperatureControlled: flags.frigo ? true : undefined,
+    hazardous: flags.adr || (tipMarfa.ok && tipMarfa.flags.hazardous) ? true : undefined,
+    temperatureControlled: flags.frigo || (tipMarfa.ok && tipMarfa.flags.temperatureControlled) ? true : undefined,
+    groupage: ocupareCamion.ok ? ocupareCamion.value : undefined,
 
     offeredPrice: {
       price: budget,
@@ -1014,6 +1071,13 @@ app.post("/webhooks/monday", async (req, res) => {
         );
         return res.status(200).json({ ok: true, skipped: true });
       }
+    }
+
+    // Mark as processing as soon as publish flow starts.
+    try {
+      await changeStatusLabel(boardId, itemId, triggerStatusColId, PROCESSING_LABEL);
+    } catch (e: any) {
+      console.warn(`${scope} failed to set processing status: ${String(e?.message || "")}`);
     }
 
     // 1) Business rules first
