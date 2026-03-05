@@ -311,8 +311,8 @@ function parseFlagsFromText(raw: string): LoadFlags {
 // =====================
 // TRUCKTYPE MAPPING
 // =====================
-// 123cargo truckType codes (spec v0.55):
-// 1 Box, 2 Tilt, 3 Flat, 9 Oversized, 10 Car transporter, 5 Tipper, 6 Tank, 8 Liquid food container, 7 Container
+// 123cargo truckType codes:
+// 1 Box, 2 Tilt, 3 Flat, 5 Tipper, 6 Tank, 7 Container, 8 Liquid food container, 9 Oversized, 10 Car transporter, 11 Tractor Unit
 const UI_RO_TO_123CARGO_TRUCKTYPE: Record<string, { code: number; apiName: string } | null> = {
   duba: { code: 1, apiName: "Box" },
   box: { code: 1, apiName: "Box" },
@@ -341,23 +341,69 @@ const UI_RO_TO_123CARGO_TRUCKTYPE: Record<string, { code: number; apiName: strin
   "transport autoturisme": { code: 10, apiName: "Car transporter" },
   "car transporter": { code: 10, apiName: "Car transporter" },
 
-  // Not a 123cargo truckType
-  "cap tractor": null,
+  // Tractor Unit is available in newer API specs
+  "cap tractor": { code: 11, apiName: "Tractor Unit" },
+  "tractor unit": { code: 11, apiName: "Tractor Unit" },
+
+  // Monday preset aliases (RO/EN labels with tonnage)
+  "van 3.5t prelata": { code: 2, apiName: "Tilt" },
+  "3.5t curtain-sided van": { code: 2, apiName: "Tilt" },
+  "camion 7.5t prelata": { code: 2, apiName: "Tilt" },
+  "7.5t curtain-sided truck": { code: 2, apiName: "Tilt" },
+  "camion 40t prelata": { code: 2, apiName: "Tilt" },
+  "40t curtain-sided truck": { code: 2, apiName: "Tilt" },
+  "12t curtain-sided truck": { code: 2, apiName: "Tilt" },
+  "18t curtain-sided truck": { code: 2, apiName: "Tilt" },
+  "40t mega truck (curtain-sided)": { code: 2, apiName: "Tilt" },
+  "40t curtain-sided truck and trailer (120cbm)": { code: 2, apiName: "Tilt" },
+
+  "van 3.5t box": { code: 1, apiName: "Box" },
+  "3.5t box van": { code: 1, apiName: "Box" },
+  "3.5t rigid van": { code: 1, apiName: "Box" },
+  "7.5t rigid truck": { code: 1, apiName: "Box" },
+  "12t rigid truck": { code: 1, apiName: "Box" },
+  "18t rigid truck": { code: 1, apiName: "Box" },
+  "40t rigid truck": { code: 1, apiName: "Box" },
+
+  "tipper truck gmp certified": { code: 5, apiName: "Tipper" },
+  "tipper truck": { code: 5, apiName: "Tipper" },
+
+  "cisterna adr": { code: 6, apiName: "Tank" },
+  "adr tanker": { code: 6, apiName: "Tank" },
+  "food-grade tanker": { code: 8, apiName: "Liquid food container" },
+
+  "sasiu container": { code: 7, apiName: "Container" },
+  "container chassis": { code: 7, apiName: "Container" },
+  "trailer agabaritic": { code: 9, apiName: "Oversized" },
+  "oversized trailer": { code: 9, apiName: "Oversized" },
+
+  "platforma auto deschisa": { code: 10, apiName: "Car transporter" },
+  "open car transporter": { code: 10, apiName: "Car transporter" },
+  "platforma auto inchisa": { code: 10, apiName: "Car transporter" },
+  "enclosed car transporter": { code: 10, apiName: "Car transporter" },
+
+  "camion 40t platforma deschisa": { code: 3, apiName: "Flat" },
+  "flatbed 40t truck": { code: 3, apiName: "Flat" },
 };
 
 function mapTruckTypeFromMondayUi(labelRaw: string) {
   const rightSide = stripRightSideAfterSlash(labelRaw); // handles "Box / duba" -> "duba"
-  const key = normalizeRoLabel(rightSide);
-  if (!key) return { ok: false as const, error: "Tip Mijloc Transport gol." };
+  const keys = Array.from(new Set([normalizeRoLabel(rightSide), normalizeRoLabel(labelRaw)])).filter(Boolean);
+  if (keys.length === 0) return { ok: false as const, error: "Tip Mijloc Transport gol." };
 
-  const mapped = UI_RO_TO_123CARGO_TRUCKTYPE[key];
-  if (mapped === undefined) {
-    return { ok: false as const, error: `Tip Mijloc Transport necunoscut: '${labelRaw}'` };
+  for (const key of keys) {
+    const mapped = UI_RO_TO_123CARGO_TRUCKTYPE[key];
+    if (mapped === undefined) continue;
+    if (mapped === null) {
+      return {
+        ok: false as const,
+        error: `Tip Mijloc Transport '${labelRaw}' nu are corespondent valid în 123cargo.`,
+      };
+    }
+    return { ok: true as const, code: mapped.code, apiName: mapped.apiName };
   }
-  if (mapped === null) {
-    return { ok: false as const, error: `Tip Mijloc Transport '${labelRaw}' nu are corespondent valid în 123cargo.` };
-  }
-  return { ok: true as const, code: mapped.code, apiName: mapped.apiName };
+
+  return { ok: false as const, error: `Tip Mijloc Transport necunoscut: '${labelRaw}'` };
 }
 
 // =====================
