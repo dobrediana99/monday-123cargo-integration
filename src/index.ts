@@ -67,6 +67,7 @@ if (!Number.isFinite(TWO_STEP_TICKET_TTL_SECONDS) || TWO_STEP_TICKET_TTL_SECONDS
   );
 }
 const TWO_STEP_TICKET_TTL_MS = Math.trunc(TWO_STEP_TICKET_TTL_SECONDS * 1000);
+const TWO_STEP_LINK_COLUMN_ID = process.env.TWO_STEP_LINK_COLUMN_ID || "";
 
 // =====================
 // USER_MAP (Base64("user:pass"))
@@ -160,6 +161,14 @@ async function changeTextColumn(boardId: string, itemId: string, columnId: strin
   return mondayGql(m, { boardId, itemId, colId: columnId, val: text });
 }
 
+async function changeLinkColumn(boardId: string, itemId: string, columnId: string, url: string, text: string) {
+  const m = `
+    mutation ($boardId:ID!, $itemId:ID!, $colId:String!, $val:JSON!) {
+      change_column_value(board_id:$boardId, item_id:$itemId, column_id:$colId, value:$val) { id }
+    }`;
+  return mondayGql(m, { boardId, itemId, colId: columnId, val: JSON.stringify({ url, text }) });
+}
+
 async function changeStatusLabel(boardId: string, itemId: string, statusColId: string, label: string) {
   const m = `
     mutation ($boardId:ID!, $itemId:ID!, $colId:String!, $val:JSON!) {
@@ -194,12 +203,11 @@ function buildTwoStepUrl(req: express.Request, ticketId: string): string {
 }
 
 function buildTwoStepMondayMessage(link: string): string {
-  // Monday text columns display plain text; HTML anchors are rendered literally.
-  // Keep a direct URL so the UI can auto-detect it as a clickable link.
-  return toDisplayMessage(
-    `Trebuie sa introduci codul primit in email: AICI -> ${link}\n` +
-      `Daca nu se deschide direct, copiaza URL-ul in browser.`
-  );
+  if (TWO_STEP_LINK_COLUMN_ID) {
+    return toDisplayMessage("Trebuie sa introduci codul primit in email: AICI");
+  }
+  // Fallback when there is no dedicated link column.
+  return toDisplayMessage(`Trebuie sa introduci codul primit in email: AICI -> ${link}`);
 }
 
 function isTwoStepRequiredResponse(status: number, data: any): boolean {
@@ -1062,6 +1070,13 @@ app.post("/webhooks/monday", async (req, res) => {
       const msg = buildTwoStepMondayMessage(link);
       console.warn(`${scope} 2step required, ticket=${ticketId}`);
       await changeTextColumn(boardId, itemId, ERROR_COLUMN_ID, msg);
+      if (TWO_STEP_LINK_COLUMN_ID) {
+        try {
+          await changeLinkColumn(boardId, itemId, TWO_STEP_LINK_COLUMN_ID, link, "AICI");
+        } catch (e: any) {
+          console.warn(`${scope} failed to set 2-step link column: ${String(e?.message || "")}`);
+        }
+      }
       await changeStatusLabel(boardId, itemId, triggerStatusColId, ERROR_LABEL);
       return res.status(200).json({ ok: true, twoStepRequired: true });
     }
