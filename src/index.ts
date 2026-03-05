@@ -1,6 +1,7 @@
 import express from "express";
 import axios from "axios";
 import dotenv from "dotenv";
+import crypto from "crypto";
 
 import countries from "i18n-iso-countries";
 import { createRequire } from "module";
@@ -57,6 +58,15 @@ if (!Number.isFinite(DEFAULT_LOADING_INTERVAL_DAYS) || DEFAULT_LOADING_INTERVAL_
     `DEFAULT_LOADING_INTERVAL_DAYS invalid: '${DEFAULT_LOADING_INTERVAL_DAYS_RAW}'. Expected number > 0.`
   );
 }
+const APP_BASE_URL = process.env.APP_BASE_URL || "";
+const TWO_STEP_TICKET_TTL_SECONDS_RAW = process.env.TWO_STEP_TICKET_TTL_SECONDS || "900";
+const TWO_STEP_TICKET_TTL_SECONDS = Number(TWO_STEP_TICKET_TTL_SECONDS_RAW);
+if (!Number.isFinite(TWO_STEP_TICKET_TTL_SECONDS) || TWO_STEP_TICKET_TTL_SECONDS <= 0) {
+  throw new Error(
+    `TWO_STEP_TICKET_TTL_SECONDS invalid: '${TWO_STEP_TICKET_TTL_SECONDS_RAW}'. Expected number > 0.`
+  );
+}
+const TWO_STEP_TICKET_TTL_MS = Math.trunc(TWO_STEP_TICKET_TTL_SECONDS * 1000);
 
 // =====================
 // USER_MAP (Base64("user:pass"))
@@ -77,6 +87,15 @@ type MondayColumnValue = { id: string; text: string | null; value: string | null
 type MondayItem = { id: string; name: string; column_values: MondayColumnValue[] };
 type MondayGraphQLError = { message?: string };
 type MondayGraphQLResponse<T> = { data?: T; errors?: MondayGraphQLError[] };
+type TwoStepTicket = {
+  id: string;
+  createdAt: number;
+  boardId: string;
+  itemId: string;
+  triggerStatusColId: string;
+  authHeader: string;
+  payload: any;
+};
 type MondayWebhookBody = {
   challenge?: string;
   event?: {
@@ -88,6 +107,8 @@ type MondayWebhookBody = {
     previousValue?: any;
   };
 };
+const twoStepTickets = new Map<string, TwoStepTicket>();
+const twoStepCookieCache = new Map<string, string>();
 
 // =====================
 // MONDAY HELPERS
@@ -155,6 +176,48 @@ function getStatusLabel(col: MondayColumnValue | undefined): string {
   } catch {
     return "";
   }
+}
+
+function toDisplayMessage(input: string, max = 1800): string {
+  return input.length <= max ? input : `${input.slice(0, max - 3)}...`;
+}
+
+function makeTwoStepTicketId() {
+  return crypto.randomBytes(16).toString("hex");
+}
+
+function buildTwoStepUrl(req: express.Request, ticketId: string): string {
+  const base =
+    APP_BASE_URL ||
+    `${req.headers["x-forwarded-proto"] ? String(req.headers["x-forwarded-proto"]) : req.protocol}://${req.get("host")}`;
+  return `${base.replace(/\/+$/, "")}/2step?t=${encodeURIComponent(ticketId)}`;
+}
+
+function isTwoStepRequiredResponse(status: number, data: any): boolean {
+  if (status === 409) return true;
+  const txt = String(data?.response ?? "").toLowerCase();
+  return txt.includes("2 step authentication required");
+}
+
+function extractTwoStepCookie(data: any, setCookieHeader: unknown): string | null {
+  const fromResponse =
+    typeof data?.response === "string"
+      ? data.response.trim()
+      : typeof data?.response?.cookie === "string"
+        ? String(data.response.cookie).trim()
+        : null;
+  if (fromResponse) return fromResponse;
+
+  const setCookie = Array.isArray(setCookieHeader)
+    ? setCookieHeader
+    : typeof setCookieHeader === "string"
+      ? [setCookieHeader]
+      : [];
+  for (const c of setCookie) {
+    const m = String(c).match(/Bursa-2step-authentication=([^;]+)/i);
+    if (m?.[1]) return m[1];
+  }
+  return null;
 }
 
 // =====================
@@ -637,24 +700,150 @@ function buildLoadPayload(cols: Record<string, MondayColumnValue>, itemId: strin
 // =====================
 // 123CARGO CALL (POST /loads)
 // =====================
-async function postLoad(authHeader: string, payload: any) {
+async function postLoad(authHeader: string, payload: any, twoStepCookie?: string) {
+  const cookie = twoStepCookie || twoStepCookieCache.get(authHeader);
   const res = await axios.post(`${BURSA_BASE}/loads`, payload, {
     headers: {
       "Content-Type": "application/json",
       Authorization: authHeader,
+      ...(cookie ? { Cookie: `Bursa-2step-authentication=${cookie}` } : {}),
     },
     validateStatus: () => true,
   });
   return res;
 }
 
+async function submitTwoStepCode(authHeader: string, code: string) {
+  const res = await axios.post(
+    `${BURSA_BASE}/login/login`,
+    { code },
+    {
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: authHeader,
+      },
+      validateStatus: () => true,
+    }
+  );
+  return res;
+}
+
+function getValidTicket(ticketId: string): TwoStepTicket | null {
+  const t = twoStepTickets.get(ticketId);
+  if (!t) return null;
+  if (Date.now() - t.createdAt > TWO_STEP_TICKET_TTL_MS) {
+    twoStepTickets.delete(ticketId);
+    return null;
+  }
+  return t;
+}
+
+async function processTwoStepTicket(ticketId: string, code: string) {
+  const ticket = getValidTicket(ticketId);
+  if (!ticket) return { ok: false as const, message: "Ticket invalid sau expirat." };
+  if (!code.trim()) return { ok: false as const, message: "Codul SMS este obligatoriu." };
+
+  const authRes = await submitTwoStepCode(ticket.authHeader, code.trim());
+  const authOk = authRes.status === 200 && authRes.data?.resultCode === 0;
+  if (!authOk) {
+    return {
+      ok: false as const,
+      message: `Cod invalid sau autentificare 2-step eșuată: HTTP ${authRes.status} - ${JSON.stringify(authRes.data)}`,
+    };
+  }
+
+  const cookie = extractTwoStepCookie(authRes.data, authRes.headers?.["set-cookie"]);
+  if (!cookie) {
+    return {
+      ok: false as const,
+      message: "2-step validat, dar nu am primit cookie Bursa-2step-authentication.",
+    };
+  }
+
+  twoStepCookieCache.set(ticket.authHeader, cookie);
+  const publishRes = await postLoad(ticket.authHeader, ticket.payload, cookie);
+  const publishOk = publishRes.status === 200 && publishRes.data?.resultCode === 0;
+
+  if (publishOk) {
+    await changeStatusLabel(ticket.boardId, ticket.itemId, ticket.triggerStatusColId, SUCCESS_LABEL);
+    await changeTextColumn(ticket.boardId, ticket.itemId, ERROR_COLUMN_ID, "");
+    twoStepTickets.delete(ticketId);
+    return { ok: true as const, message: "Publicare realizată cu succes." };
+  }
+
+  const msg = `[123CARGO] HTTP ${publishRes.status} - ${JSON.stringify(publishRes.data)?.slice(0, 800)}`;
+  await changeTextColumn(ticket.boardId, ticket.itemId, ERROR_COLUMN_ID, toDisplayMessage(msg));
+  await changeStatusLabel(ticket.boardId, ticket.itemId, ticket.triggerStatusColId, ERROR_LABEL);
+  return { ok: false as const, message: `Publicarea a eșuat după validarea 2-step. ${msg}` };
+}
+
 // =====================
 // EXPRESS
 // =====================
 const app = express();
+app.set("trust proxy", true);
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 
 app.get("/health", (_, res) => res.json({ ok: true }));
+
+app.get("/2step", (req, res) => {
+  const ticketId = String(req.query.t || "");
+  const valid = ticketId ? getValidTicket(ticketId) : null;
+  if (!valid) {
+    return res.status(400).send(`
+      <html><body style="font-family: sans-serif; max-width: 640px; margin: 40px auto;">
+        <h2>Ticket invalid sau expirat</h2>
+        <p>Repornește publicarea din Monday pentru a genera un nou link.</p>
+      </body></html>
+    `);
+  }
+
+  return res.status(200).send(`
+    <html><body style="font-family: sans-serif; max-width: 640px; margin: 40px auto;">
+      <h2>Confirmare 2-step BursaTransport</h2>
+      <p>Introdu codul SMS primit pentru a finaliza publicarea.</p>
+      <form method="post" action="/2step">
+        <input type="hidden" name="ticketId" value="${valid.id}" />
+        <label for="code">Cod SMS</label><br />
+        <input id="code" name="code" autocomplete="one-time-code" style="padding:8px; width: 220px;" />
+        <button type="submit" style="margin-left:8px; padding:8px 12px;">Confirmă</button>
+      </form>
+    </body></html>
+  `);
+});
+
+app.post("/2step", async (req, res) => {
+  const ticketId = String(req.body?.ticketId || "");
+  const code = String(req.body?.code || "");
+  try {
+    const result = await processTwoStepTicket(ticketId, code);
+    return res.status(result.ok ? 200 : 400).send(`
+      <html><body style="font-family: sans-serif; max-width: 640px; margin: 40px auto;">
+        <h2>${result.ok ? "Succes" : "Eroare"}</h2>
+        <p>${result.message}</p>
+      </body></html>
+    `);
+  } catch (e: any) {
+    return res.status(500).send(`
+      <html><body style="font-family: sans-serif; max-width: 640px; margin: 40px auto;">
+        <h2>Eroare internă</h2>
+        <p>${String(e?.message || "")}</p>
+      </body></html>
+    `);
+  }
+});
+
+app.post("/internal/2step/confirm", async (req, res) => {
+  const ticketId = String(req.body?.ticketId || "");
+  const code = String(req.body?.code || "");
+  try {
+    const result = await processTwoStepTicket(ticketId, code);
+    return res.status(result.ok ? 200 : 400).json(result);
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, message: String(e?.message || "internal error") });
+  }
+});
 
 app.post("/webhooks/monday", async (req, res) => {
   const body = req.body as MondayWebhookBody;
@@ -667,7 +856,10 @@ app.post("/webhooks/monday", async (req, res) => {
 
     const boardIdRaw = event.boardId;
     const itemIdRaw = event.pulseId ?? event.itemId;
-    const triggerStatusColId = String(event.columnId ?? "");
+    const triggerStatusColId =
+      typeof event.columnId === "object" && event.columnId !== null
+        ? String((event.columnId as any).columnId || "")
+        : String(event.columnId ?? "");
     if (boardIdRaw === undefined || boardIdRaw === null || itemIdRaw === undefined || itemIdRaw === null) {
       console.warn("[WEBHOOK] missing boardId/itemId in event payload");
       return res.status(200).json({ ok: true, skipped: true });
@@ -734,6 +926,26 @@ app.post("/webhooks/monday", async (req, res) => {
 
     // 5) call 123cargo
     const bursaRes = await postLoad(authPick.authHeader, payload);
+    if (isTwoStepRequiredResponse(bursaRes.status, bursaRes.data)) {
+      const ticketId = makeTwoStepTicketId();
+      const ticket: TwoStepTicket = {
+        id: ticketId,
+        createdAt: Date.now(),
+        boardId,
+        itemId,
+        triggerStatusColId,
+        authHeader: authPick.authHeader,
+        payload,
+      };
+      twoStepTickets.set(ticketId, ticket);
+      const link = buildTwoStepUrl(req, ticketId);
+      const msg = toDisplayMessage(`[2STEP] Bursa solicită cod SMS. Continuă aici: ${link}`);
+      console.warn(`${scope} 2step required, ticket=${ticketId}`);
+      await changeTextColumn(boardId, itemId, ERROR_COLUMN_ID, msg);
+      await changeStatusLabel(boardId, itemId, triggerStatusColId, ERROR_LABEL);
+      return res.status(200).json({ ok: true, twoStepRequired: true });
+    }
+
     const ok = bursaRes.status === 200 && bursaRes.data?.resultCode === 0;
 
     if (ok) {
