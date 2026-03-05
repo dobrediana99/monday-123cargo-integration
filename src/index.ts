@@ -714,7 +714,19 @@ async function postLoad(authHeader: string, payload: any, twoStepCookie?: string
 }
 
 async function submitTwoStepCode(authHeader: string, code: string) {
-  const res = await axios.post(
+  // API spec says "POST parameter code", so we send form-urlencoded first.
+  const form = new URLSearchParams({ code });
+  const formRes = await axios.post(`${BURSA_BASE}/login/login`, form.toString(), {
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: authHeader,
+    },
+    validateStatus: () => true,
+  });
+  if (formRes.status !== 409) return formRes;
+
+  // Fallback for environments that accept JSON.
+  return axios.post(
     `${BURSA_BASE}/login/login`,
     { code },
     {
@@ -725,7 +737,6 @@ async function submitTwoStepCode(authHeader: string, code: string) {
       validateStatus: () => true,
     }
   );
-  return res;
 }
 
 function getValidTicket(ticketId: string): TwoStepTicket | null {
