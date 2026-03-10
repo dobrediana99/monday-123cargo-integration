@@ -870,15 +870,37 @@ function buildLoadPayload(cols: Record<string, MondayColumnValue>, itemId: strin
 // 123CARGO CALL (POST /loads)
 // =====================
 async function postLoad(authHeader: string, payload: any, twoStepCookie?: string) {
-  const cookie = twoStepCookie || twoStepCookieCache.get(authHeader);
-  const res = await axios.post(`${BURSA_BASE}/loads`, payload, {
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: authHeader,
-      ...(cookie ? { Cookie: `Bursa-2step-authentication=${cookie}` } : {}),
-    },
-    validateStatus: () => true,
-  });
+  const doPost = async (cookieValue?: string) =>
+    axios.post(`${BURSA_BASE}/loads`, payload, {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        Authorization: authHeader,
+        ...(cookieValue ? { Cookie: `Bursa-2step-authentication=${cookieValue}` } : {}),
+      },
+      validateStatus: () => true,
+    });
+
+  const cachedCookie = twoStepCookieCache.get(authHeader);
+  const firstCookie = twoStepCookie || cachedCookie;
+  let res = await doPost(firstCookie);
+
+  // If we relied on cached cookie and got auth/html response, retry once without cookie.
+  // This avoids stale 2-step cookies poisoning subsequent requests.
+  if (!twoStepCookie && cachedCookie) {
+    const contentType = String(res.headers?.["content-type"] || "").toLowerCase();
+    const bodyText =
+      typeof res.data === "string"
+        ? res.data.toLowerCase()
+        : JSON.stringify(res.data || "").toLowerCase();
+    const looksHtml = contentType.includes("text/html") || bodyText.includes("<!doctype html");
+    if (res.status === 401 || res.status === 403 || looksHtml) {
+      console.warn("[123CARGO] cached 2-step cookie rejected; retrying without cookie");
+      twoStepCookieCache.delete(authHeader);
+      res = await doPost(undefined);
+    }
+  }
+
   return res;
 }
 
@@ -888,6 +910,7 @@ async function submitTwoStepCode(authHeader: string, code: string) {
   const formRes = await axios.post(`${BURSA_BASE}/login/login`, form.toString(), {
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
       Authorization: authHeader,
     },
     validateStatus: () => true,
@@ -901,6 +924,7 @@ async function submitTwoStepCode(authHeader: string, code: string) {
     {
       headers: {
         "Content-Type": "application/json",
+        Accept: "application/json",
         Authorization: authHeader,
       },
       validateStatus: () => true,
@@ -1152,10 +1176,11 @@ app.post("/webhooks/monday", async (req, res) => {
       await changeStatusLabel(boardId, itemId, triggerStatusColId, SUCCESS_LABEL);
       await changeTextColumn(boardId, itemId, ERROR_COLUMN_ID, "");
     } else {
+      const contentType = String(bursaRes.headers?.["content-type"] || "");
       console.warn(
-        `${scope} 123cargo failed: HTTP ${bursaRes.status} body=${JSON.stringify(bursaRes.data)?.slice(0, 800)}`
+        `${scope} 123cargo failed: HTTP ${bursaRes.status} contentType=${contentType} body=${JSON.stringify(bursaRes.data)?.slice(0, 800)}`
       );
-      const msg = `[123CARGO] HTTP ${bursaRes.status} - ${JSON.stringify(bursaRes.data)?.slice(0, 800)}`;
+      const msg = `[123CARGO] HTTP ${bursaRes.status} (${contentType || "unknown"}) - ${JSON.stringify(bursaRes.data)?.slice(0, 800)}`;
       await changeTextColumn(boardId, itemId, ERROR_COLUMN_ID, msg);
       await changeStatusLabel(boardId, itemId, triggerStatusColId, ERROR_LABEL);
     }
