@@ -18,13 +18,13 @@ countries.registerLocale(en);
 function reqEnv(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env var: ${name}`);
-  return v;
+  return v.trim();
 }
 
 const PORT = Number(process.env.PORT || 3000);
 
 const MONDAY_TOKEN = reqEnv("MONDAY_TOKEN");
-const BURSA_BASE = reqEnv("BURSA_BASE");
+const BURSA_BASE = reqEnv("BURSA_BASE").replace(/\/+$/, "");
 
 // Monday column IDs (set these in env)
 const DEAL_OWNER_COLUMN_ID = reqEnv("DEAL_OWNER_COLUMN_ID"); // People column: Principal
@@ -51,9 +51,9 @@ const PRELUAT_DE_COLUMN_ID = process.env.PRELUAT_DE_COLUMN_ID || "multiple_perso
 
 // Optional: test override mode. When enabled, posts always use this fixed Bursa account
 // and user columns (Principal / Preluat de) are ignored for auth checks.
-const FORCE_TEST_AUTH_MODE = process.env.FORCE_TEST_AUTH_MODE === "1";
-const TEST_BURSA_USERNAME = process.env.TEST_BURSA_USERNAME || "";
-const TEST_BURSA_PASSWORD = process.env.TEST_BURSA_PASSWORD || "";
+const FORCE_TEST_AUTH_MODE = (process.env.FORCE_TEST_AUTH_MODE || "").trim() === "1";
+const TEST_BURSA_USERNAME = (process.env.TEST_BURSA_USERNAME || "").trim();
+const TEST_BURSA_PASSWORD = (process.env.TEST_BURSA_PASSWORD || "").trim();
 const DEFAULT_LOADING_INTERVAL_DAYS_RAW = process.env.DEFAULT_LOADING_INTERVAL_DAYS || "1";
 const DEFAULT_LOADING_INTERVAL_DAYS = Number(DEFAULT_LOADING_INTERVAL_DAYS_RAW);
 if (!Number.isFinite(DEFAULT_LOADING_INTERVAL_DAYS) || DEFAULT_LOADING_INTERVAL_DAYS <= 0) {
@@ -71,6 +71,10 @@ if (!Number.isFinite(TWO_STEP_TICKET_TTL_SECONDS) || TWO_STEP_TICKET_TTL_SECONDS
 }
 const TWO_STEP_TICKET_TTL_MS = Math.trunc(TWO_STEP_TICKET_TTL_SECONDS * 1000);
 const TWO_STEP_LINK_COLUMN_ID = process.env.TWO_STEP_LINK_COLUMN_ID || "";
+
+if (!/\/api$/i.test(BURSA_BASE)) {
+  console.warn(`[CONFIG] BURSA_BASE is '${BURSA_BASE}', expected to end with '/api'`);
+}
 
 // =====================
 // USER_MAP (Base64("user:pass"))
@@ -1121,6 +1125,8 @@ app.post("/webhooks/monday", async (req, res) => {
       await changeStatusLabel(boardId, itemId, triggerStatusColId, ERROR_LABEL);
       return res.status(200).json({ ok: true });
     }
+    const authMode = FORCE_TEST_AUTH_MODE ? "test" : "owner-map";
+    console.log(`${scope} auth mode=${authMode}`);
 
     // 3) validate required
     const validationErrors = validateRequired(cols);
@@ -1180,7 +1186,7 @@ app.post("/webhooks/monday", async (req, res) => {
       console.warn(
         `${scope} 123cargo failed: HTTP ${bursaRes.status} contentType=${contentType} body=${JSON.stringify(bursaRes.data)?.slice(0, 800)}`
       );
-      const msg = `[123CARGO] HTTP ${bursaRes.status} (${contentType || "unknown"}) - ${JSON.stringify(bursaRes.data)?.slice(0, 800)}`;
+      const msg = `[123CARGO][${authMode}] HTTP ${bursaRes.status} (${contentType || "unknown"}) - ${JSON.stringify(bursaRes.data)?.slice(0, 800)}`;
       await changeTextColumn(boardId, itemId, ERROR_COLUMN_ID, msg);
       await changeStatusLabel(boardId, itemId, triggerStatusColId, ERROR_LABEL);
     }
