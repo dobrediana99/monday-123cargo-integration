@@ -90,7 +90,7 @@ function parseStatusActions(triggerStatusLabel: string): Record<string, RoutedAc
   return Object.keys(normalized).length ? normalized : defaultMap;
 }
 
-const triggerStatusLabel = (process.env.TRIGGER_STATUS_ONLY_LABEL || "De publicat pe bursa").trim();
+const triggerStatusLabel = (process.env.TRIGGER_STATUS_ONLY_LABEL || "De publicat").trim();
 
 export const config = {
   nodeEnv: (process.env.NODE_ENV || "development").trim(),
@@ -109,6 +109,7 @@ export const config = {
     dealOwner: reqEnv("DEAL_OWNER_COLUMN_ID"),
     preluatDe: (process.env.PRELUAT_DE_COLUMN_ID || "multiple_person_mkybbcca").trim(),
     error: reqEnv("ERROR_COLUMN_ID"),
+    site: (process.env.SITE_COLUMN_ID || "color_mm1r535n").trim(),
     tipMarfa: (process.env.TIP_MARFA_COLUMN_ID || "color_mksemxby").trim(),
     ocupareCamion: (process.env.OCUPARE_CAMION_COLUMN_ID || "color_mkrb3hhk").trim(),
     twoStepLink: (process.env.TWO_STEP_LINK_COLUMN_ID || "").trim(),
@@ -116,6 +117,8 @@ export const config = {
     privateNotice: (process.env.PRIVATE_NOTICE_COLUMN_ID || "").trim(),
     externalLoadId: (process.env.EXTERNAL_LOAD_ID_COLUMN_ID || "").trim(),
   },
+  // Legacy status routing config kept for backwards compatibility only.
+  // Main publish flow no longer relies on STATUS_ACTIONS_JSON.
   integrations: {
     cargo123: {
       baseUrl: reqEnv("BURSA_BASE").replace(/\/+$/, ""),

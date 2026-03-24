@@ -5,6 +5,7 @@ import { MondayClient, extractEventRef, getStatusLabel, type MondayWebhookBody }
 import { StatusRouter } from "./statusRouter.js";
 import { cargo123Integration } from "../integrations/123cargo.js";
 import { cargopediaIntegration } from "../integrations/cargopedia.js";
+import { timocomIntegration } from "../integrations/timocom.js";
 import type { FreightIntegration, IntegrationContext, IntegrationResult } from "../integrations/types.js";
 
 type TwoStepTokenPayload = {
@@ -29,7 +30,43 @@ type TwoStepProcessResult = {
 const integrations: Record<string, FreightIntegration> = {
   "123cargo": cargo123Integration,
   cargopedia: cargopediaIntegration,
+  timocom: timocomIntegration,
 };
+
+function normalizeSiteLabel(label: string): string {
+  return (label ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/ă/g, "a")
+    .replace(/â/g, "a")
+    .replace(/î/g, "i")
+    .replace(/ș/g, "s")
+    .replace(/ş/g, "s")
+    .replace(/ț/g, "t")
+    .replace(/ţ/g, "t");
+}
+
+function siteLabelToIntegrationKey(label: string): string | null {
+  const normalized = normalizeSiteLabel(label);
+  if (!normalized) return null;
+  if (normalized === "cargopedia") return "cargopedia";
+  if (normalized === "bursa(123cargo)") return "123cargo";
+  if (normalized === "timocom") return "timocom";
+  return null;
+}
+
+function parseIntegrationsFromSiteColumn(siteText: string): string[] {
+  // Designed to support future multi-select values (e.g. comma/semicolon separated).
+  const rawSiteText = String(siteText ?? "");
+  const tokens = rawSiteText
+    .split(/[;,|]/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+  if (!tokens.length && rawSiteText.trim()) tokens.push(rawSiteText.trim());
+
+  const mapped = tokens.map(siteLabelToIntegrationKey).filter((x): x is string => Boolean(x));
+  return Array.from(new Set(mapped));
+}
 
 function toDisplayMessage(input: string, max = 1800) {
   return input.length <= max ? input : `${input.slice(0, max - 3)}...`;
@@ -125,27 +162,28 @@ export class EventProcessor {
     const item = await this.monday.fetchItem(ref.boardId, ref.itemId);
     const cols = this.monday.colsToMap(item.column_values);
 
-    if (config.labels.triggerOnly) {
-      const currentLabel = getStatusLabel(cols[ref.columnId]);
-      if (currentLabel && currentLabel !== config.labels.triggerOnly) {
-        logger.info("Skipping event due to trigger-only label mismatch", {
-          ...scope,
-          currentLabel,
-          expectedLabel: config.labels.triggerOnly,
-        });
-        return;
-      }
+    const statusLabel = getStatusLabel(cols[ref.columnId]) || String(cols[ref.columnId]?.text || "");
+    if (!this.router.isPublishTrigger(statusLabel)) {
+      logger.info("Skipping event because status is not publish trigger", { ...scope, statusLabel });
+      return;
     }
 
-    const statusLabel = getStatusLabel(cols[ref.columnId]) || String(cols[ref.columnId]?.text || "");
-    const actions = this.router.resolve(statusLabel);
-    if (!actions.length) {
-      logger.info("No action routed for status", { ...scope, statusLabel });
+    const siteColumnId = config.mondayColumns.site;
+    const siteLabel = String(cols[siteColumnId]?.text || "").trim();
+    const targetIntegrations = parseIntegrationsFromSiteColumn(siteLabel);
+    if (!targetIntegrations.length) {
+      await this.setErrorState(
+        ref.boardId,
+        ref.itemId,
+        ref.columnId,
+        `[SITE] Invalid or empty Site value '${siteLabel}'. Allowed: Cargopedia, Bursa(123cargo), Timocom.`
+      );
+      logger.warn("No integrations resolved from Site column", { ...scope, siteLabel, siteColumnId });
       return;
     }
 
     await this.monday.changeStatusLabel(ref.boardId, ref.itemId, ref.columnId, config.labels.processing);
-    logger.info("Status switched to processing", { ...scope, statusLabel });
+    logger.info("Status switched to processing", { ...scope, statusLabel, siteLabel, targetIntegrations });
 
     const context: IntegrationContext = {
       boardId: ref.boardId,
@@ -154,23 +192,33 @@ export class EventProcessor {
       item,
     };
 
-    for (const route of actions) {
-      if (!config.enabledIntegrations.includes(route.integration)) {
-        logger.info("Integration disabled, skipping", { ...scope, integration: route.integration, action: route.action });
+    let executedIntegrations = 0;
+    for (const integrationKey of targetIntegrations) {
+      if (!config.enabledIntegrations.includes(integrationKey)) {
+        logger.info("Integration disabled, skipping", { ...scope, integration: integrationKey, action: "publishLoad" });
         continue;
       }
-      const integration = integrations[route.integration];
+      executedIntegrations += 1;
+      const integration = integrations[integrationKey];
       if (!integration) {
-        await this.setErrorState(ref.boardId, ref.itemId, ref.columnId, `[ROUTER] Unknown integration: ${route.integration}`);
+        await this.setErrorState(ref.boardId, ref.itemId, ref.columnId, `[ROUTER] Unknown integration: ${integrationKey}`);
         return;
       }
-
+      if (integrationKey === "timocom") {
+        await this.setErrorState(
+          ref.boardId,
+          ref.itemId,
+          ref.columnId,
+          "[TIMOCOM] Integrarea este inca neimplementata."
+        );
+        return;
+      }
       logger.info("Triggering integration action", {
         ...scope,
         integration: integration.name,
-        action: route.action,
+        action: "publishLoad",
       });
-      const result = await this.runAction(route.action, integration, context);
+      const result = await this.runAction("publishLoad", integration, context);
 
       if (result.status === "requires_two_step") {
         const tokenPayload: TwoStepTokenPayload = {
@@ -179,7 +227,7 @@ export class EventProcessor {
           boardId: ref.boardId,
           itemId: ref.itemId,
           statusColumnId: ref.columnId,
-          integration: route.integration,
+          integration: integrationKey,
           action: "publishLoad",
         };
         const token = this.signTwoStepToken(tokenPayload);
@@ -189,15 +237,25 @@ export class EventProcessor {
         if (config.mondayColumns.twoStepLink) {
           await this.monday.changeLinkColumn(ref.boardId, ref.itemId, config.mondayColumns.twoStepLink, link, "AICI");
         }
-        logger.warn("Two-step required, waiting for user code", { ...scope, integration: route.integration });
+        logger.warn("Two-step required, waiting for user code", { ...scope, integration: integrationKey });
         return;
       }
 
       if (result.status === "error") {
         await this.setErrorState(ref.boardId, ref.itemId, ref.columnId, result.message);
-        logger.warn("Integration action failed", { ...scope, integration: route.integration, message: result.message });
+        logger.warn("Integration action failed", { ...scope, integration: integrationKey, message: result.message });
         return;
       }
+    }
+
+    if (!executedIntegrations) {
+      await this.setErrorState(
+        ref.boardId,
+        ref.itemId,
+        ref.columnId,
+        `[SITE] Selected marketplace(s) are disabled via ENABLED_INTEGRATIONS: ${targetIntegrations.join(", ")}`
+      );
+      return;
     }
 
     await this.monday.changeStatusLabel(ref.boardId, ref.itemId, ref.columnId, config.labels.success);

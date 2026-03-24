@@ -1,9 +1,4 @@
-import { config, type IntegrationAction } from "../utils/config.js";
-
-export type RoutedAction = {
-  integration: string;
-  action: IntegrationAction;
-};
+const PUBLISH_TRIGGER_LABEL = "de publicat";
 
 function normalizeLabel(label: string): string {
   return (label ?? "")
@@ -19,18 +14,9 @@ function normalizeLabel(label: string): string {
 }
 
 export class StatusRouter {
-  private readonly routes: Map<string, RoutedAction[]>;
-
-  constructor() {
-    this.routes = new Map<string, RoutedAction[]>();
-    for (const [status, actions] of Object.entries(config.statusActions)) {
-      this.routes.set(normalizeLabel(status), actions);
-    }
-  }
-
-  resolve(statusLabel: string): RoutedAction[] {
+  isPublishTrigger(statusLabel: string): boolean {
     const key = normalizeLabel(statusLabel);
-    if (!key) return [];
-    return this.routes.get(key) || [];
+    if (!key) return false;
+    return key === PUBLISH_TRIGGER_LABEL;
   }
 }
