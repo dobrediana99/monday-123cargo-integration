@@ -16,7 +16,7 @@ src/
     eventProcessor.ts      # async event orchestration/dispatcher
   integrations/
     123cargo.ts            # 123cargo/Bursa business rules + API calls
-    cargopedia.ts          # placeholder integration module
+    cargopedia.ts          # Cargopedia integration module
     types.ts               # integration contracts
   utils/
     config.ts              # env parsing/validation
@@ -76,7 +76,28 @@ TWO_STEP_TOKEN_SECRET=replace-with-long-random-secret
 # Optional Cargopedia
 CARGOPEDIA_BASE_URL=
 CARGOPEDIA_API_KEY=
+CARGOPEDIA_USER_ID=
+CARGOPEDIA_API_KEY_SECRET=
+CARGOPEDIA_USER_ID_SECRET=
 ```
+
+### Cargopedia credentials via Google Secret Manager
+
+For Cloud Run, prefer using Secret Manager references:
+
+```env
+CARGOPEDIA_BASE_URL=https://www.cargopedia.net
+CARGOPEDIA_API_KEY_SECRET=projects/<PROJECT_ID>/secrets/CARGOPEDIA_API_KEY/versions/latest
+CARGOPEDIA_USER_ID_SECRET=projects/<PROJECT_ID>/secrets/CARGOPEDIA_USER_ID/versions/latest
+```
+
+Supported secret reference formats:
+
+- Full version path: `projects/<PROJECT_ID>/secrets/<SECRET_NAME>/versions/<VERSION>`
+- Secret path without version: `projects/<PROJECT_ID>/secrets/<SECRET_NAME>` (auto-uses `latest`)
+- Secret name only: `<SECRET_NAME>` (auto-expands with `GOOGLE_CLOUD_PROJECT` and `latest`)
+
+For local development, `CARGOPEDIA_API_KEY` and `CARGOPEDIA_USER_ID` can still be provided directly.
 
 ## Local run
 

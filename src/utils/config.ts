@@ -124,6 +124,9 @@ export const config = {
     cargopedia: {
       baseUrl: (process.env.CARGOPEDIA_BASE_URL || "").trim(),
       apiKey: (process.env.CARGOPEDIA_API_KEY || "").trim(),
+      apiKeySecret: (process.env.CARGOPEDIA_API_KEY_SECRET || "").trim(),
+      userId: (process.env.CARGOPEDIA_USER_ID || "").trim(),
+      userIdSecret: (process.env.CARGOPEDIA_USER_ID_SECRET || "").trim(),
     },
   },
   auth: {
