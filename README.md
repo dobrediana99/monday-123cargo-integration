@@ -30,7 +30,11 @@ src/
   - for regular events: returns HTTP 200 immediately and processes asynchronously
 - `POST /webhooks/monday` is kept for backwards compatibility.
 - `POST /2step` and `POST /internal/2step/confirm` finalize 2-step confirmation flow.
-- Status-based routing is centralized in `StatusRouter`.
+- Publish trigger is a single status label: `De publicat`.
+- Target marketplace is selected from monday `Site` column (`color_mm1r535n` by default):
+  - `Cargopedia` -> `cargopedia`
+  - `Bursa(123cargo)` -> `123cargo`
+  - `Timocom` -> `timocom` (placeholder integration)
 
 ## Required environment variables
 
@@ -48,9 +52,8 @@ TRIGGER_STATUS_ERROR_LABEL=Eroare
 ```env
 PORT=8080
 TRIGGER_STATUS_PROCESSING_LABEL=Procesare
-TRIGGER_STATUS_ONLY_LABEL=De publicat pe bursa
 ENABLED_INTEGRATIONS=123cargo,cargopedia
-STATUS_ACTIONS_JSON={"De publicat pe bursa":[{"integration":"123cargo","action":"publishLoad"}]}
+SITE_COLUMN_ID=color_mm1r535n
 
 # 123cargo auth mode
 FORCE_TEST_AUTH_MODE=0
@@ -67,6 +70,10 @@ TWO_STEP_LINK_COLUMN_ID=
 FLAGS_COLUMN_ID=
 PRIVATE_NOTICE_COLUMN_ID=
 EXTERNAL_LOAD_ID_COLUMN_ID=
+
+# Legacy only (no longer used by the main publish flow)
+TRIGGER_STATUS_ONLY_LABEL=De publicat
+STATUS_ACTIONS_JSON={"De publicat":[{"integration":"123cargo","action":"publishLoad"}]}
 
 # 2-step tokenized flow
 APP_BASE_URL=https://your-service-url
