@@ -131,6 +131,11 @@ export const config = {
       userId: (process.env.CARGOPEDIA_USER_ID || "").trim(),
       userIdSecret: (process.env.CARGOPEDIA_USER_ID_SECRET || "").trim(),
     },
+    timocom: {
+      baseUrl: (process.env.TIMOCOM_BASE_URL || "").trim(),
+      apiToken: (process.env.TIMOCOM_API_TOKEN || "").trim(),
+      apiTokenSecret: (process.env.TIMOCOM_API_TOKEN_SECRET || "").trim(),
+    },
   },
   auth: {
     forceTestMode: (process.env.FORCE_TEST_AUTH_MODE || "").trim() === "1",
