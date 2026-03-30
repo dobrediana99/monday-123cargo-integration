@@ -6,6 +6,7 @@ import { StatusRouter } from "./statusRouter.js";
 import { cargo123Integration } from "../integrations/123cargo.js";
 import { cargopediaIntegration } from "../integrations/cargopedia.js";
 import { timocomIntegration } from "../integrations/timocom.js";
+import { transeuIntegration } from "../integrations/transeu.js";
 import type { FreightIntegration, IntegrationContext, IntegrationResult } from "../integrations/types.js";
 
 type TwoStepTokenPayload = {
@@ -31,42 +32,8 @@ const integrations: Record<string, FreightIntegration> = {
   "123cargo": cargo123Integration,
   cargopedia: cargopediaIntegration,
   timocom: timocomIntegration,
+  transeu: transeuIntegration,
 };
-
-function normalizeSiteLabel(label: string): string {
-  return (label ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/ă/g, "a")
-    .replace(/â/g, "a")
-    .replace(/î/g, "i")
-    .replace(/ș/g, "s")
-    .replace(/ş/g, "s")
-    .replace(/ț/g, "t")
-    .replace(/ţ/g, "t");
-}
-
-function siteLabelToIntegrationKey(label: string): string | null {
-  const normalized = normalizeSiteLabel(label);
-  if (!normalized) return null;
-  if (normalized === "cargopedia") return "cargopedia";
-  if (normalized === "bursa(123cargo)") return "123cargo";
-  if (normalized === "timocom") return "timocom";
-  return null;
-}
-
-function parseIntegrationsFromSiteColumn(siteText: string): string[] {
-  // Designed to support future multi-select values (e.g. comma/semicolon separated).
-  const rawSiteText = String(siteText ?? "");
-  const tokens = rawSiteText
-    .split(/[;,|]/)
-    .map((x) => x.trim())
-    .filter(Boolean);
-  if (!tokens.length && rawSiteText.trim()) tokens.push(rawSiteText.trim());
-
-  const mapped = tokens.map(siteLabelToIntegrationKey).filter((x): x is string => Boolean(x));
-  return Array.from(new Set(mapped));
-}
 
 function toDisplayMessage(input: string, max = 1800) {
   return input.length <= max ? input : `${input.slice(0, max - 3)}...`;
@@ -170,13 +137,13 @@ export class EventProcessor {
 
     const siteColumnId = config.mondayColumns.site;
     const siteLabel = String(cols[siteColumnId]?.text || "").trim();
-    const targetIntegrations = parseIntegrationsFromSiteColumn(siteLabel);
+    const targetIntegrations = this.router.resolveIntegrationsFromSite(siteLabel);
     if (!targetIntegrations.length) {
       await this.setErrorState(
         ref.boardId,
         ref.itemId,
         ref.columnId,
-        `[SITE] Invalid or empty Site value '${siteLabel}'. Allowed: Cargopedia, Bursa(123cargo), Timocom.`
+        `[SITE] Invalid or empty Site value '${siteLabel}'. Allowed: Cargopedia, Bursa(123cargo), Timocom, Trans.eu.`
       );
       logger.warn("No integrations resolved from Site column", { ...scope, siteLabel, siteColumnId });
       return;

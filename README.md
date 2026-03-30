@@ -17,6 +17,7 @@ src/
   integrations/
     123cargo.ts            # 123cargo/Bursa business rules + API calls
     cargopedia.ts          # Cargopedia integration module
+    transeu.ts             # Trans.eu integration module (OAuth + freight publish)
     types.ts               # integration contracts
   utils/
     config.ts              # env parsing/validation
@@ -35,6 +36,7 @@ src/
   - `Cargopedia` -> `cargopedia`
   - `Bursa(123cargo)` -> `123cargo`
   - `Timocom` -> `timocom` (placeholder integration)
+  - `Trans.eu` -> `transeu`
 
 ## Required environment variables
 
@@ -52,7 +54,7 @@ TRIGGER_STATUS_ERROR_LABEL=Eroare
 ```env
 PORT=8080
 TRIGGER_STATUS_PROCESSING_LABEL=Procesare
-ENABLED_INTEGRATIONS=123cargo,cargopedia
+ENABLED_INTEGRATIONS=123cargo,cargopedia,transeu
 SITE_COLUMN_ID=color_mm1r535n
 
 # 123cargo auth mode
@@ -86,6 +88,17 @@ CARGOPEDIA_API_KEY=
 CARGOPEDIA_USER_ID=
 CARGOPEDIA_API_KEY_SECRET=
 CARGOPEDIA_USER_ID_SECRET=
+
+# Optional Trans.eu (required only if `transeu` is enabled in ENABLED_INTEGRATIONS)
+TRANSEU_BASE_URL=https://api.platform.trans.eu
+TRANSEU_CLIENT_ID=
+TRANSEU_CLIENT_SECRET=
+TRANSEU_API_KEY=
+TRANSEU_REFRESH_TOKEN=
+# Optional alternatives for token bootstrap:
+TRANSEU_ACCESS_TOKEN=
+TRANSEU_AUTH_CODE=
+TRANSEU_REDIRECT_URI=
 ```
 
 ### Cargopedia credentials via Google Secret Manager

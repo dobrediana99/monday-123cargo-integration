@@ -25,6 +25,11 @@ function reqEnv(name: string): string {
   return value;
 }
 
+function reqEnvWhen(name: string, condition: boolean): string {
+  if (!condition) return (process.env[name] || "").trim();
+  return reqEnv(name);
+}
+
 function parseNumberEnv(name: string, defaultValue: number): number {
   const raw = (process.env[name] || "").trim();
   if (!raw) return defaultValue;
@@ -91,13 +96,15 @@ function parseStatusActions(triggerStatusLabel: string): Record<string, RoutedAc
 }
 
 const triggerStatusLabel = (process.env.TRIGGER_STATUS_ONLY_LABEL || "De publicat").trim();
+const enabledIntegrations = parseCsv((process.env.ENABLED_INTEGRATIONS || "123cargo,cargopedia").trim());
+const isTransEuEnabled = enabledIntegrations.includes("transeu");
 
 export const config = {
   nodeEnv: (process.env.NODE_ENV || "development").trim(),
   port: parseNumberEnv("PORT", 8080),
   mondayApiToken: reqEnv("MONDAY_TOKEN"),
   mondayApiUrl: (process.env.MONDAY_API_URL || "https://api.monday.com/v2").trim(),
-  enabledIntegrations: parseCsv((process.env.ENABLED_INTEGRATIONS || "123cargo,cargopedia").trim()),
+  enabledIntegrations,
   statusActions: parseStatusActions(triggerStatusLabel),
   labels: {
     triggerOnly: triggerStatusLabel,
@@ -135,6 +142,16 @@ export const config = {
       baseUrl: (process.env.TIMOCOM_BASE_URL || "").trim(),
       apiToken: (process.env.TIMOCOM_API_TOKEN || "").trim(),
       apiTokenSecret: (process.env.TIMOCOM_API_TOKEN_SECRET || "").trim(),
+    },
+    transeu: {
+      baseUrl: reqEnvWhen("TRANSEU_BASE_URL", isTransEuEnabled).replace(/\/+$/, ""),
+      clientId: reqEnvWhen("TRANSEU_CLIENT_ID", isTransEuEnabled),
+      clientSecret: reqEnvWhen("TRANSEU_CLIENT_SECRET", isTransEuEnabled),
+      apiKey: reqEnvWhen("TRANSEU_API_KEY", isTransEuEnabled),
+      accessToken: (process.env.TRANSEU_ACCESS_TOKEN || "").trim(),
+      refreshToken: (process.env.TRANSEU_REFRESH_TOKEN || "").trim(),
+      authCode: (process.env.TRANSEU_AUTH_CODE || "").trim(),
+      redirectUri: (process.env.TRANSEU_REDIRECT_URI || "").trim(),
     },
   },
   auth: {
