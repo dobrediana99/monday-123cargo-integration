@@ -169,3 +169,107 @@ export const config = {
 
 export type AppConfig = typeof config;
 export type { IntegrationAction, RoutedActionConfig, UserMapEntry };
+import dotenv from "dotenv";
+
+dotenv.config();
+
+export type BursaEmailMapEntry = { username: string };
+
+export type AppConfig = {
+  port: number;
+  mondayToken: string;
+  bursaBase: string;
+  /** Shared password for Basic Auth (username comes from email map). */
+  bursaPassword: string;
+  mondayColumns: {
+    dealOwner: string;
+    error: string;
+    /** Status column "Publicare bursa" — only this column triggers the flow. */
+    publicationBursa: string;
+  };
+  publicationBursa: {
+    /** Exact label that starts publish flow. */
+    triggerLabel: string;
+    /** Status while work is in progress. */
+    processingLabel: string;
+    successLabel: string;
+    errorLabel: string;
+  };
+  flagsColumnId: string;
+  privateNoticeColumnId: string;
+  auth: {
+    /** Keys are normalized: trim + lowerCase. */
+    bursaUserMapByEmail: Record<string, BursaEmailMapEntry>;
+  };
+};
+
+const DEFAULT_BURSA_USER_MAP_BY_EMAIL: Record<string, BursaEmailMapEntry> = {
+  "alexandru.n@crystal-logistics-services.com": { username: "Transport.202501" },
+  "andrei.p@crystal-logistics-services.com": { username: "Transport.5253" },
+  "denisa.i@crystal-logistics-services.com": { username: "Transport.2601" },
+};
+
+function reqEnv(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing env var: ${name}`);
+  return v;
+}
+
+function normalizeEmailKey(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+function parseBursaUserMapFromJson(raw: string): Record<string, BursaEmailMapEntry> {
+  const parsed = JSON.parse(raw) as Record<string, unknown>;
+  const out: Record<string, BursaEmailMapEntry> = {};
+  for (const [email, entry] of Object.entries(parsed)) {
+    const key = normalizeEmailKey(email);
+    if (!key) continue;
+    if (!entry || typeof entry !== "object") throw new Error(`Invalid map entry for "${email}"`);
+    const username = (entry as { username?: unknown }).username;
+    if (typeof username !== "string" || !username.trim()) {
+      throw new Error(`Invalid username for "${email}"`);
+    }
+    out[key] = { username: username.trim() };
+  }
+  return out;
+}
+
+function loadBursaUserMapByEmail(): Record<string, BursaEmailMapEntry> {
+  const raw = process.env.BURSA_USER_MAP_BY_EMAIL_JSON?.trim();
+  if (!raw) {
+    return { ...DEFAULT_BURSA_USER_MAP_BY_EMAIL };
+  }
+  return parseBursaUserMapFromJson(raw);
+}
+
+let cached: AppConfig | null = null;
+
+export function getConfig(): AppConfig {
+  if (cached) return cached;
+
+  cached = {
+    port: Number(process.env.PORT || 3000),
+    mondayToken: reqEnv("MONDAY_TOKEN"),
+    bursaBase: reqEnv("BURSA_BASE"),
+    bursaPassword: reqEnv("BURSA_PASSWORD"),
+    mondayColumns: {
+      dealOwner: reqEnv("DEAL_OWNER_COLUMN_ID"),
+      error: reqEnv("ERROR_COLUMN_ID"),
+      publicationBursa: process.env.PUBLICARE_BURSA_COLUMN_ID?.trim() || "color_mkyp8xqz",
+    },
+    publicationBursa: {
+      triggerLabel: process.env.PUBLICARE_BURSA_TRIGGER_LABEL?.trim() || "Publica pe bursa",
+      processingLabel: process.env.PUBLICARE_BURSA_PROCESSING_LABEL?.trim() || "Procesare",
+      successLabel: reqEnv("TRIGGER_STATUS_SUCCESS_LABEL"),
+      errorLabel: reqEnv("TRIGGER_STATUS_ERROR_LABEL"),
+    },
+    flagsColumnId: process.env.FLAGS_COLUMN_ID?.trim() || "",
+    privateNoticeColumnId: process.env.PRIVATE_NOTICE_COLUMN_ID?.trim() || "",
+    auth: {
+      bursaUserMapByEmail: loadBursaUserMapByEmail(),
+    },
+  };
+
+  return cached;
+}

@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 const PUBLISH_TRIGGER_LABEL = "de publicat";
 const SITE_TO_INTEGRATION: Record<string, string> = {
   cargopedia: "cargopedia",
@@ -46,4 +47,50 @@ export class StatusRouter {
 
     return Array.from(new Set(integrations));
   }
+=======
+import type { MondayClient } from "./mondayClient.js";
+import type { AppConfig } from "../utils/config.js";
+
+/** Status lifecycle for the "Publicare bursa" column only. */
+export async function setPublicationProcessing(
+  monday: MondayClient,
+  cfg: AppConfig,
+  boardId: number,
+  itemId: number
+) {
+  await monday.changeStatusLabel(
+    boardId,
+    itemId,
+    cfg.mondayColumns.publicationBursa,
+    cfg.publicationBursa.processingLabel
+  );
+}
+
+export async function setPublicationSuccess(
+  monday: MondayClient,
+  cfg: AppConfig,
+  boardId: number,
+  itemId: number
+) {
+  await monday.changeStatusLabel(
+    boardId,
+    itemId,
+    cfg.mondayColumns.publicationBursa,
+    cfg.publicationBursa.successLabel
+  );
+}
+
+export async function setPublicationError(
+  monday: MondayClient,
+  cfg: AppConfig,
+  boardId: number,
+  itemId: number
+) {
+  await monday.changeStatusLabel(
+    boardId,
+    itemId,
+    cfg.mondayColumns.publicationBursa,
+    cfg.publicationBursa.errorLabel
+  );
+>>>>>>> 91aa0ec (feat(bursa): add email-based auth using Principal and restrict trigger to Publicare bursa column)
 }
