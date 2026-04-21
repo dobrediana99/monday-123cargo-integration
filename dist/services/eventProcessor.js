@@ -1,71 +1,194 @@
+import crypto from "crypto";
+import { cargo123Integration, postBursaLoad, resolveBasicAuthForBursa, bursaResponseRequiresTwoStep } from "../integrations/123cargo.js";
 import { getConfig } from "../utils/config.js";
+import { logger } from "../utils/logger.js";
 import { colsToMap, getStatusLabel } from "../utils/mondayParsing.js";
-import { postLoadTo123Cargo, resolveBasicAuthForBursa } from "../integrations/123cargo.js";
 import { buildLoadPayload, validateBusinessRules, validateRequired } from "./loadProcessing.js";
+import { MondayClient, extractEventRef } from "./mondayClient.js";
 import * as statusRouter from "./statusRouter.js";
-function resolveTriggerColumnId(event) {
-    return event.columnId?.trim() || event.ref?.columnId?.trim();
+function toDisplayMessage(input, max = 1800) {
+    return input.length <= max ? input : `${input.slice(0, max - 3)}...`;
 }
-export async function processWebhookPayload(body, monday) {
-    if (body?.challenge) {
-        return { httpStatus: 200, json: { challenge: body.challenge } };
-    }
+function b64url(data) {
+    return Buffer.from(data, "utf8").toString("base64url");
+}
+function buildBaseUrlFromRequestMeta(meta) {
     const cfg = getConfig();
-    const event = body?.event;
-    if (!event) {
-        return { httpStatus: 200, json: { ok: true } };
+    if (cfg.twoStep.appBaseUrl)
+        return cfg.twoStep.appBaseUrl.replace(/\/+$/, "");
+    if (meta?.baseUrl)
+        return meta.baseUrl.replace(/\/+$/, "");
+    return "";
+}
+function buildTwoStepMessage(link) {
+    const cfg = getConfig();
+    if (cfg.mondayColumns.twoStepLink) {
+        return "Trebuie sa introduci codul primit in email: AICI";
     }
-    const triggerCol = resolveTriggerColumnId(event);
-    if (triggerCol !== cfg.mondayColumns.publicationBursa) {
-        return { httpStatus: 200, json: { ok: true, skipped: true, reason: "wrong_column" } };
+    return `Trebuie sa introduci codul primit in email: AICI -> ${link}`;
+}
+export class EventProcessor {
+    monday = new MondayClient();
+    signTwoStepToken(payload) {
+        const encodedPayload = b64url(JSON.stringify(payload));
+        const secret = getConfig().twoStep.tokenSecret;
+        const signature = crypto.createHmac("sha256", secret).update(encodedPayload).digest("base64url");
+        return `${encodedPayload}.${signature}`;
     }
-    const boardId = Number(event.boardId);
-    const itemId = Number(event.pulseId ?? event.itemId);
-    if (!Number.isFinite(boardId) || !Number.isFinite(itemId)) {
-        return { httpStatus: 200, json: { ok: true, skipped: true, reason: "missing_ids" } };
+    verifyTwoStepToken(token) {
+        const [encodedPayload, encodedSignature] = String(token || "").split(".");
+        if (!encodedPayload || !encodedSignature) {
+            return { ok: false, reason: "Token invalid." };
+        }
+        const secret = getConfig().twoStep.tokenSecret;
+        const expected = crypto.createHmac("sha256", secret).update(encodedPayload).digest("base64url");
+        const sigOk = crypto.timingSafeEqual(Buffer.from(encodedSignature), Buffer.from(expected));
+        if (!sigOk)
+            return { ok: false, reason: "Semnătură token invalidă." };
+        let payload;
+        try {
+            payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8"));
+        }
+        catch {
+            return { ok: false, reason: "Payload token invalid." };
+        }
+        if (payload.v !== 1 || payload.action !== "publishLoad") {
+            return { ok: false, reason: "Versiune token invalidă." };
+        }
+        if (Date.now() > payload.exp) {
+            return { ok: false, reason: "Ticket invalid sau expirat" };
+        }
+        return { ok: true, payload };
     }
-    const publicationColId = cfg.mondayColumns.publicationBursa;
-    const item = await monday.fetchItem(boardId, itemId);
-    const cols = colsToMap(item.column_values);
-    const currentLabel = getStatusLabel(cols[publicationColId]);
-    if (currentLabel !== cfg.publicationBursa.triggerLabel) {
-        return { httpStatus: 200, json: { ok: true, skipped: true, reason: "wrong_label" } };
+    async setPublicationErrorWithMessage(boardId, itemId, statusColumnId, message) {
+        const cfg = getConfig();
+        await this.monday.changeTextColumn(boardId, itemId, cfg.mondayColumns.error, toDisplayMessage(message));
+        await this.monday.changeStatusLabel(boardId, itemId, statusColumnId, cfg.publicationBursa.errorLabel);
     }
-    await statusRouter.setPublicationProcessing(monday, cfg, boardId, itemId);
-    const fail = async (prefix, message) => {
-        await monday.changeTextColumn(boardId, itemId, cfg.mondayColumns.error, `${prefix} ${message}`);
-        await statusRouter.setPublicationError(monday, cfg, boardId, itemId);
-    };
-    const businessErrors = validateBusinessRules(cols);
-    if (businessErrors.length) {
-        await fail("[BUSINESS RULES]", businessErrors.join("; "));
-        return { httpStatus: 200, json: { ok: true } };
+    async clearErrorState(boardId, itemId) {
+        const cfg = getConfig();
+        await this.monday.changeTextColumn(boardId, itemId, cfg.mondayColumns.error, "");
+        if (cfg.mondayColumns.twoStepLink) {
+            await this.monday.changeLinkColumn(boardId, itemId, cfg.mondayColumns.twoStepLink, "", "");
+        }
     }
-    const authPick = await resolveBasicAuthForBursa(monday, cols);
-    if (!authPick.ok) {
-        await fail("[USER]", authPick.error);
-        return { httpStatus: 200, json: { ok: true } };
+    buildTwoStepLink(meta, token) {
+        const baseUrl = buildBaseUrlFromRequestMeta(meta);
+        return `${baseUrl}/2step?token=${encodeURIComponent(token)}`;
     }
-    const validationErrors = validateRequired(cols);
-    if (validationErrors.length) {
-        await fail("[VALIDATION]", validationErrors.join("; "));
-        return { httpStatus: 200, json: { ok: true } };
+    /**
+     * Publicare Bursă: doar coloana `publicationBursa` + label `Publica pe bursa`.
+     * Fără rutare Site / fără trigger generic „De publicat”.
+     */
+    async processWebhookPayload(body, meta) {
+        const cfg = getConfig();
+        const ref = extractEventRef(body);
+        if (!ref) {
+            logger.warn("Webhook payload missing event ref");
+            return;
+        }
+        if (ref.columnId !== cfg.mondayColumns.publicationBursa) {
+            return;
+        }
+        const { boardId, itemId } = ref;
+        const item = await this.monday.fetchItem(boardId, itemId);
+        const cols = colsToMap(item.column_values);
+        const currentLabel = getStatusLabel(cols[cfg.mondayColumns.publicationBursa]);
+        if (currentLabel !== cfg.publicationBursa.triggerLabel) {
+            logger.info("Skipping webhook: publication label mismatch", { currentLabel });
+            return;
+        }
+        await statusRouter.setPublicationProcessing(this.monday, cfg, boardId, itemId);
+        const fail = async (prefix, message) => {
+            const text = `${prefix} ${message}`.trim().slice(0, 1800);
+            await this.monday.changeTextColumn(boardId, itemId, cfg.mondayColumns.error, text);
+            await statusRouter.setPublicationError(this.monday, cfg, boardId, itemId);
+        };
+        const businessErrors = validateBusinessRules(cols);
+        if (businessErrors.length) {
+            await fail("[BUSINESS RULES]", businessErrors.join("; "));
+            return;
+        }
+        const authPick = await resolveBasicAuthForBursa(this.monday, cols);
+        if (!authPick.ok) {
+            await fail("[USER]", authPick.error);
+            return;
+        }
+        const validationErrors = validateRequired(cols);
+        if (validationErrors.length) {
+            await fail("[VALIDATION]", validationErrors.join("; "));
+            return;
+        }
+        const { payload, errors: mapErrors } = buildLoadPayload(cols, Number(itemId));
+        if (mapErrors.length) {
+            await fail("[MAPPING]", mapErrors.join("; "));
+            return;
+        }
+        const bursaRes = await postBursaLoad(authPick.authHeader, payload);
+        if (bursaResponseRequiresTwoStep(bursaRes.status, bursaRes.data)) {
+            const tokenPayload = {
+                v: 1,
+                exp: Date.now() + cfg.twoStep.tokenTtlSeconds * 1000,
+                boardId,
+                itemId,
+                statusColumnId: cfg.mondayColumns.publicationBursa,
+                integration: "123cargo",
+                action: "publishLoad",
+            };
+            const token = this.signTwoStepToken(tokenPayload);
+            const link = this.buildTwoStepLink(meta, token);
+            const text = buildTwoStepMessage(link);
+            await this.setPublicationErrorWithMessage(boardId, itemId, cfg.mondayColumns.publicationBursa, text);
+            if (cfg.mondayColumns.twoStepLink) {
+                await this.monday.changeLinkColumn(boardId, itemId, cfg.mondayColumns.twoStepLink, link, "AICI");
+            }
+            logger.warn("Two-step required, waiting for user code", { boardId, itemId });
+            return;
+        }
+        const ok = bursaRes.status === 200 && bursaRes.data?.resultCode === 0;
+        if (ok) {
+            await statusRouter.setPublicationSuccess(this.monday, cfg, boardId, itemId);
+            await this.monday.changeTextColumn(boardId, itemId, cfg.mondayColumns.error, "");
+        }
+        else {
+            const msg = `HTTP ${bursaRes.status} - ${JSON.stringify(bursaRes.data)?.slice(0, 800)}`;
+            await fail("[123CARGO]", msg);
+        }
     }
-    const { payload, errors: mapErrors } = buildLoadPayload(cols, itemId);
-    if (mapErrors.length) {
-        await fail("[MAPPING]", mapErrors.join("; "));
-        return { httpStatus: 200, json: { ok: true } };
+    validateTwoStepToken(token) {
+        const verified = this.verifyTwoStepToken(token);
+        if (!verified.ok)
+            return { ok: false, message: verified.reason };
+        return { ok: true, message: "ok" };
     }
-    const bursaRes = await postLoadTo123Cargo(authPick.authHeader, payload);
-    const ok = bursaRes.status === 200 && bursaRes.data?.resultCode === 0;
-    if (ok) {
-        await statusRouter.setPublicationSuccess(monday, cfg, boardId, itemId);
-        await monday.changeTextColumn(boardId, itemId, cfg.mondayColumns.error, "");
+    async processTwoStepToken(token, code) {
+        const cfg = getConfig();
+        const verified = this.verifyTwoStepToken(token);
+        if (!verified.ok)
+            return { ok: false, message: verified.reason };
+        if (!code.trim())
+            return { ok: false, message: "Codul SMS este obligatoriu." };
+        const payload = verified.payload;
+        if (payload.integration !== "123cargo" || !cargo123Integration.completeTwoStepPublish) {
+            return { ok: false, message: `Integrarea '${payload.integration}' nu suportă confirmare 2-step aici.` };
+        }
+        const item = await this.monday.fetchItem(payload.boardId, payload.itemId);
+        const context = {
+            boardId: payload.boardId,
+            itemId: payload.itemId,
+            statusColumnId: payload.statusColumnId,
+            item,
+            mondayClient: this.monday,
+        };
+        await this.monday.changeStatusLabel(payload.boardId, payload.itemId, payload.statusColumnId, cfg.publicationBursa.processingLabel);
+        const result = await cargo123Integration.completeTwoStepPublish(context, code.trim());
+        if (result.status === "success") {
+            await this.monday.changeStatusLabel(payload.boardId, payload.itemId, payload.statusColumnId, cfg.publicationBursa.successLabel);
+            await this.clearErrorState(payload.boardId, payload.itemId);
+            return { ok: true, message: "Publicare realizată cu succes." };
+        }
+        const message = result.status === "error" ? result.message : "[123CARGO] Eroare necunoscută.";
+        await this.setPublicationErrorWithMessage(payload.boardId, payload.itemId, payload.statusColumnId, message);
+        return { ok: false, message };
     }
-    else {
-        const msg = `[123CARGO] HTTP ${bursaRes.status} - ${JSON.stringify(bursaRes.data)?.slice(0, 800)}`;
-        await monday.changeTextColumn(boardId, itemId, cfg.mondayColumns.error, msg);
-        await statusRouter.setPublicationError(monday, cfg, boardId, itemId);
-    }
-    return { httpStatus: 200, json: { ok: true } };
 }

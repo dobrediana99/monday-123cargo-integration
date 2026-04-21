@@ -1,4 +1,5 @@
 import type { MondayItem } from "../services/mondayClient.js";
+import type { MondayClient } from "../services/mondayClient.js";
 
 export type IntegrationAction = "publishLoad" | "removeLoad";
 
@@ -7,6 +8,8 @@ export type IntegrationContext = {
   itemId: string;
   statusColumnId: string;
   item: MondayItem;
+  /** Required for 123cargo auth (Principal → Monday user email → Bursa username). */
+  mondayClient?: MondayClient;
 };
 
 export type IntegrationResult =

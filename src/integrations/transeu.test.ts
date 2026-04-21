@@ -8,6 +8,7 @@ process.env.TRIGGER_STATUS_ERROR_LABEL = process.env.TRIGGER_STATUS_ERROR_LABEL 
 process.env.DEAL_OWNER_COLUMN_ID = process.env.DEAL_OWNER_COLUMN_ID || "deal_owner";
 process.env.ERROR_COLUMN_ID = process.env.ERROR_COLUMN_ID || "error_col";
 process.env.BURSA_BASE = process.env.BURSA_BASE || "https://bursa.example";
+process.env.BURSA_PASSWORD = process.env.BURSA_PASSWORD || "test-bursa-password";
 process.env.TRANSEU_BASE_URL = process.env.TRANSEU_BASE_URL || "https://api.platform.trans.eu";
 process.env.TRANSEU_CLIENT_ID = process.env.TRANSEU_CLIENT_ID || "client-id";
 process.env.TRANSEU_CLIENT_SECRET = process.env.TRANSEU_CLIENT_SECRET || "client-secret";

@@ -1,62 +1,12 @@
-<<<<<<< HEAD
-const PUBLISH_TRIGGER_LABEL = "de publicat";
-const SITE_TO_INTEGRATION: Record<string, string> = {
-  cargopedia: "cargopedia",
-  "bursa(123cargo)": "123cargo",
-  "123cargo": "123cargo",
-  timocom: "timocom",
-  "trans.eu": "transeu",
-  "trans eu": "transeu",
-  transeu: "transeu",
-};
-
-function normalizeLabel(label: string): string {
-  return (label ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/ă/g, "a")
-    .replace(/â/g, "a")
-    .replace(/î/g, "i")
-    .replace(/ș/g, "s")
-    .replace(/ş/g, "s")
-    .replace(/ț/g, "t")
-    .replace(/ţ/g, "t");
-}
-
-export class StatusRouter {
-  isPublishTrigger(statusLabel: string): boolean {
-    const key = normalizeLabel(statusLabel);
-    if (!key) return false;
-    return key === PUBLISH_TRIGGER_LABEL;
-  }
-
-  resolveIntegrationsFromSite(siteText: string): string[] {
-    const rawSiteText = String(siteText ?? "");
-    const tokens = rawSiteText
-      .split(/[;,|]/)
-      .map((value) => value.trim())
-      .filter(Boolean);
-
-    if (!tokens.length && rawSiteText.trim()) {
-      tokens.push(rawSiteText.trim());
-    }
-
-    const integrations = tokens
-      .map((token) => SITE_TO_INTEGRATION[normalizeLabel(token)] ?? null)
-      .filter((value): value is string => Boolean(value));
-
-    return Array.from(new Set(integrations));
-  }
-=======
 import type { MondayClient } from "./mondayClient.js";
 import type { AppConfig } from "../utils/config.js";
 
-/** Status lifecycle for the "Publicare bursa" column only. */
+/** Status lifecycle for the "Publicare bursa" column (`color_mkyp8xqz`) only. */
 export async function setPublicationProcessing(
   monday: MondayClient,
   cfg: AppConfig,
-  boardId: number,
-  itemId: number
+  boardId: number | string,
+  itemId: number | string
 ) {
   await monday.changeStatusLabel(
     boardId,
@@ -69,8 +19,8 @@ export async function setPublicationProcessing(
 export async function setPublicationSuccess(
   monday: MondayClient,
   cfg: AppConfig,
-  boardId: number,
-  itemId: number
+  boardId: number | string,
+  itemId: number | string
 ) {
   await monday.changeStatusLabel(
     boardId,
@@ -83,8 +33,8 @@ export async function setPublicationSuccess(
 export async function setPublicationError(
   monday: MondayClient,
   cfg: AppConfig,
-  boardId: number,
-  itemId: number
+  boardId: number | string,
+  itemId: number | string
 ) {
   await monday.changeStatusLabel(
     boardId,
@@ -92,5 +42,4 @@ export async function setPublicationError(
     cfg.mondayColumns.publicationBursa,
     cfg.publicationBursa.errorLabel
   );
->>>>>>> 91aa0ec (feat(bursa): add email-based auth using Principal and restrict trigger to Publicare bursa column)
 }

@@ -1,16 +1,26 @@
 import axios from "axios";
-const MONDAY_URL = "https://api.monday.com/v2";
+import { getConfig } from "../utils/config.js";
 export class MondayClient {
-    token;
-    constructor(token) {
-        this.token = token;
+    gqlUrl() {
+        return getConfig().mondayApiUrl;
+    }
+    authHeader() {
+        return getConfig().mondayToken;
     }
     async gql(query, variables = {}) {
-        const res = await axios.post(MONDAY_URL, { query, variables }, { headers: { Authorization: this.token, "Content-Type": "application/json" } });
+        const res = await axios.post(this.gqlUrl(), { query, variables }, {
+            headers: {
+                Authorization: this.authHeader(),
+                "Content-Type": "application/json",
+            },
+        });
         const body = res.data;
-        if (body.errors?.length) {
-            throw new Error(body.errors.map((e) => e.message).join("; "));
+        if (Array.isArray(body?.errors) && body.errors.length > 0) {
+            const msg = body.errors.map((e) => e.message || "Unknown monday error").join(" | ");
+            throw new Error(`Monday GraphQL error: ${msg}`);
         }
+        if (!body?.data)
+            throw new Error("Monday GraphQL error: missing data");
         return body.data;
     }
     async fetchItem(boardId, itemId) {
@@ -22,7 +32,7 @@ export class MondayClient {
           }
         }
       }`;
-        const data = await this.gql(q, { boardId, itemId });
+        const data = await this.gql(q, { boardId: [Number(boardId)], itemId: [Number(itemId)] });
         const item = data?.boards?.[0]?.items_page?.items?.[0];
         if (!item)
             throw new Error("Item not found in monday");
@@ -33,16 +43,37 @@ export class MondayClient {
       mutation ($boardId:Int!, $itemId:Int!, $colId:String!, $val:JSON!) {
         change_column_value(board_id:$boardId, item_id:$itemId, column_id:$colId, value:$val) { id }
       }`;
-        return this.gql(m, { boardId, itemId, colId: columnId, val: JSON.stringify({ text }) });
+        return this.gql(m, {
+            boardId: Number(boardId),
+            itemId: Number(itemId),
+            colId: columnId,
+            val: JSON.stringify({ text }),
+        });
     }
     async changeStatusLabel(boardId, itemId, statusColId, label) {
         const m = `
       mutation ($boardId:Int!, $itemId:Int!, $colId:String!, $val:JSON!) {
         change_column_value(board_id:$boardId, item_id:$itemId, column_id:$colId, value:$val) { id }
       }`;
-        return this.gql(m, { boardId, itemId, colId: statusColId, val: JSON.stringify({ label }) });
+        return this.gql(m, {
+            boardId: Number(boardId),
+            itemId: Number(itemId),
+            colId: statusColId,
+            val: JSON.stringify({ label }),
+        });
     }
-    /** Resolve Monday user id → profile including email (for Bursa auth mapping). */
+    async changeLinkColumn(boardId, itemId, columnId, url, text) {
+        const m = `
+      mutation ($boardId:Int!, $itemId:Int!, $colId:String!, $val:JSON!) {
+        change_column_value(board_id:$boardId, item_id:$itemId, column_id:$colId, value:$val) { id }
+      }`;
+        return this.gql(m, {
+            boardId: Number(boardId),
+            itemId: Number(itemId),
+            colId: columnId,
+            val: JSON.stringify({ url, text }),
+        });
+    }
     async fetchUserById(userId) {
         const q = `
       query ($ids: [ID!]) {
@@ -60,4 +91,27 @@ export class MondayClient {
             return null;
         return { id: String(u.id), name: String(u.name ?? ""), email: u.email ?? null };
     }
+    colsToMap(columnValues) {
+        return Object.fromEntries(columnValues.map((c) => [c.id, c]));
+    }
+}
+export function extractEventRef(body) {
+    const event = body?.event;
+    if (!event)
+        return null;
+    const boardIdRaw = event.boardId;
+    const itemIdRaw = event.pulseId ?? event.itemId;
+    const colRaw = event.columnId;
+    const fromRef = event.ref?.columnId?.trim();
+    const fromCol = typeof colRaw === "object" && colRaw !== null
+        ? String(colRaw.columnId || "").trim()
+        : String(colRaw || "").trim();
+    const columnId = fromCol || fromRef || "";
+    if (boardIdRaw == null || itemIdRaw == null || !columnId)
+        return null;
+    return {
+        boardId: String(boardIdRaw),
+        itemId: String(itemIdRaw),
+        columnId,
+    };
 }

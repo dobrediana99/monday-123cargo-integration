@@ -2,26 +2,79 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-type IntegrationAction = "publishLoad" | "removeLoad";
+export type BursaEmailMapEntry = { username: string };
 
-type RoutedActionConfig = {
-  integration: string;
-  action: IntegrationAction;
+export type AppConfig = {
+  nodeEnv: string;
+  port: number;
+  mondayToken: string;
+  mondayApiUrl: string;
+  bursaBase: string;
+  bursaPassword: string;
+  mondayColumns: {
+    dealOwner: string;
+    error: string;
+    publicationBursa: string;
+    tipMarfa: string;
+    ocupareCamion: string;
+    flags: string;
+    privateNotice: string;
+    externalLoadId: string;
+    twoStepLink: string;
+  };
+  publicationBursa: {
+    triggerLabel: string;
+    processingLabel: string;
+    successLabel: string;
+    errorLabel: string;
+  };
+  /** Mirrors flags column id for loadProcessing helpers. */
+  flagsColumnId: string;
+  privateNoticeColumnId: string;
+  auth: {
+    bursaUserMapByEmail: Record<string, BursaEmailMapEntry>;
+    forceTestMode: boolean;
+    testUsername: string;
+    testPassword: string;
+  };
+  integrations: {
+    cargo123: { defaultLoadingIntervalDays: number };
+    cargopedia: {
+      baseUrl: string;
+      apiKey: string;
+      apiKeySecret: string;
+      userId: string;
+      userIdSecret: string;
+    };
+    timocom: { baseUrl: string; apiToken: string; apiTokenSecret: string };
+    transeu: {
+      baseUrl: string;
+      clientId: string;
+      clientSecret: string;
+      apiKey: string;
+      accessToken: string;
+      refreshToken: string;
+      authCode: string;
+      redirectUri: string;
+    };
+  };
+  enabledIntegrations: string[];
+  twoStep: {
+    appBaseUrl: string;
+    tokenSecret: string;
+    tokenTtlSeconds: number;
+  };
 };
 
-type UserMapEntry = { basicB64: string };
-
-const DEFAULT_USER_MAP: Record<number, UserMapEntry> = {
-  96280246: {
-    basicB64: "cmFmYWVsLm9AY3J5c3RhbC1sb2dpc3RpY3Mtc2VydmljZXMuY29tOlRyYW5zcG9ydC4yMDI0",
-  },
+const DEFAULT_BURSA_USER_MAP_BY_EMAIL: Record<string, BursaEmailMapEntry> = {
+  "alexandru.n@crystal-logistics-services.com": { username: "Transport.202501" },
+  "andrei.p@crystal-logistics-services.com": { username: "Transport.5253" },
+  "denisa.i@crystal-logistics-services.com": { username: "Transport.2601" },
 };
 
 function reqEnv(name: string): string {
   const value = (process.env[name] || "").trim();
-  if (!value) {
-    throw new Error(`Missing env var: ${name}`);
-  }
+  if (!value) throw new Error(`Missing env var: ${name}`);
   return value;
 }
 
@@ -34,9 +87,7 @@ function parseNumberEnv(name: string, defaultValue: number): number {
   const raw = (process.env[name] || "").trim();
   if (!raw) return defaultValue;
   const parsed = Number(raw);
-  if (!Number.isFinite(parsed)) {
-    throw new Error(`Invalid numeric env '${name}': '${raw}'`);
-  }
+  if (!Number.isFinite(parsed)) throw new Error(`Invalid numeric env '${name}': '${raw}'`);
   return parsed;
 }
 
@@ -45,174 +96,6 @@ function parseCsv(raw: string): string[] {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
-}
-
-function parseJson<T>(raw: string, fallback: T): T {
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
-
-function parseUserMap(): Record<number, UserMapEntry> {
-  const raw = (process.env.USER_MAP_JSON || "").trim();
-  if (!raw) return DEFAULT_USER_MAP;
-
-  const parsed = parseJson<Record<string, UserMapEntry>>(raw, {});
-  const mapped: Record<number, UserMapEntry> = {};
-  for (const [k, v] of Object.entries(parsed)) {
-    const id = Number(k);
-    if (!Number.isFinite(id) || !v?.basicB64) continue;
-    mapped[id] = { basicB64: String(v.basicB64).trim() };
-  }
-  return Object.keys(mapped).length ? mapped : DEFAULT_USER_MAP;
-}
-
-function parseStatusActions(triggerStatusLabel: string): Record<string, RoutedActionConfig[]> {
-  const defaultMap: Record<string, RoutedActionConfig[]> = {
-    [triggerStatusLabel]: [{ integration: "123cargo", action: "publishLoad" }],
-    "Post to 123Cargo": [{ integration: "123cargo", action: "publishLoad" }],
-    "Post to Cargopedia": [{ integration: "cargopedia", action: "publishLoad" }],
-    "Remove listing": [
-      { integration: "123cargo", action: "removeLoad" },
-      { integration: "cargopedia", action: "removeLoad" },
-    ],
-  };
-
-  const raw = (process.env.STATUS_ACTIONS_JSON || "").trim();
-  if (!raw) return defaultMap;
-  const parsed = parseJson<Record<string, RoutedActionConfig[] | RoutedActionConfig>>(raw, {});
-  const normalized: Record<string, RoutedActionConfig[]> = {};
-
-  for (const [status, value] of Object.entries(parsed)) {
-    const arr = Array.isArray(value) ? value : [value];
-    const valid = arr.filter((x) => x?.integration && (x.action === "publishLoad" || x.action === "removeLoad"));
-    if (!valid.length) continue;
-    normalized[status] = valid.map((x) => ({ integration: x.integration.trim(), action: x.action }));
-  }
-
-  return Object.keys(normalized).length ? normalized : defaultMap;
-}
-
-const triggerStatusLabel = (process.env.TRIGGER_STATUS_ONLY_LABEL || "De publicat").trim();
-const enabledIntegrations = parseCsv((process.env.ENABLED_INTEGRATIONS || "123cargo,cargopedia").trim());
-const isTransEuEnabled = enabledIntegrations.includes("transeu");
-
-export const config = {
-  nodeEnv: (process.env.NODE_ENV || "development").trim(),
-  port: parseNumberEnv("PORT", 8080),
-  mondayApiToken: reqEnv("MONDAY_TOKEN"),
-  mondayApiUrl: (process.env.MONDAY_API_URL || "https://api.monday.com/v2").trim(),
-  enabledIntegrations,
-  statusActions: parseStatusActions(triggerStatusLabel),
-  labels: {
-    triggerOnly: triggerStatusLabel,
-    success: reqEnv("TRIGGER_STATUS_SUCCESS_LABEL"),
-    error: reqEnv("TRIGGER_STATUS_ERROR_LABEL"),
-    processing: (process.env.TRIGGER_STATUS_PROCESSING_LABEL || "Procesare").trim(),
-  },
-  mondayColumns: {
-    dealOwner: reqEnv("DEAL_OWNER_COLUMN_ID"),
-    preluatDe: (process.env.PRELUAT_DE_COLUMN_ID || "multiple_person_mkybbcca").trim(),
-    error: reqEnv("ERROR_COLUMN_ID"),
-    site: (process.env.SITE_COLUMN_ID || "color_mm1r535n").trim(),
-    tipMarfa: (process.env.TIP_MARFA_COLUMN_ID || "color_mksemxby").trim(),
-    ocupareCamion: (process.env.OCUPARE_CAMION_COLUMN_ID || "color_mkrb3hhk").trim(),
-    twoStepLink: (process.env.TWO_STEP_LINK_COLUMN_ID || "").trim(),
-    flags: (process.env.FLAGS_COLUMN_ID || "").trim(),
-    privateNotice: (process.env.PRIVATE_NOTICE_COLUMN_ID || "").trim(),
-    externalLoadId: (process.env.EXTERNAL_LOAD_ID_COLUMN_ID || "").trim(),
-  },
-  // Legacy status routing config kept for backwards compatibility only.
-  // Main publish flow no longer relies on STATUS_ACTIONS_JSON.
-  integrations: {
-    cargo123: {
-      baseUrl: reqEnv("BURSA_BASE").replace(/\/+$/, ""),
-      defaultLoadingIntervalDays: parseNumberEnv("DEFAULT_LOADING_INTERVAL_DAYS", 1),
-    },
-    cargopedia: {
-      baseUrl: (process.env.CARGOPEDIA_BASE_URL || "").trim(),
-      apiKey: (process.env.CARGOPEDIA_API_KEY || "").trim(),
-      apiKeySecret: (process.env.CARGOPEDIA_API_KEY_SECRET || "").trim(),
-      userId: (process.env.CARGOPEDIA_USER_ID || "").trim(),
-      userIdSecret: (process.env.CARGOPEDIA_USER_ID_SECRET || "").trim(),
-    },
-    timocom: {
-      baseUrl: (process.env.TIMOCOM_BASE_URL || "").trim(),
-      apiToken: (process.env.TIMOCOM_API_TOKEN || "").trim(),
-      apiTokenSecret: (process.env.TIMOCOM_API_TOKEN_SECRET || "").trim(),
-    },
-    transeu: {
-      baseUrl: reqEnvWhen("TRANSEU_BASE_URL", isTransEuEnabled).replace(/\/+$/, ""),
-      clientId: reqEnvWhen("TRANSEU_CLIENT_ID", isTransEuEnabled),
-      clientSecret: reqEnvWhen("TRANSEU_CLIENT_SECRET", isTransEuEnabled),
-      apiKey: reqEnvWhen("TRANSEU_API_KEY", isTransEuEnabled),
-      accessToken: (process.env.TRANSEU_ACCESS_TOKEN || "").trim(),
-      refreshToken: (process.env.TRANSEU_REFRESH_TOKEN || "").trim(),
-      authCode: (process.env.TRANSEU_AUTH_CODE || "").trim(),
-      redirectUri: (process.env.TRANSEU_REDIRECT_URI || "").trim(),
-    },
-  },
-  auth: {
-    forceTestMode: (process.env.FORCE_TEST_AUTH_MODE || "").trim() === "1",
-    testUsername: (process.env.TEST_BURSA_USERNAME || "").trim(),
-    testPassword: (process.env.TEST_BURSA_PASSWORD || "").trim(),
-    userMap: parseUserMap(),
-  },
-  twoStep: {
-    appBaseUrl: (process.env.APP_BASE_URL || "").trim(),
-    tokenTtlSeconds: parseNumberEnv("TWO_STEP_TOKEN_TTL_SECONDS", parseNumberEnv("TWO_STEP_TICKET_TTL_SECONDS", 900)),
-    tokenSecret: (process.env.TWO_STEP_TOKEN_SECRET || reqEnv("MONDAY_TOKEN")).trim(),
-  },
-} as const;
-
-export type AppConfig = typeof config;
-export type { IntegrationAction, RoutedActionConfig, UserMapEntry };
-import dotenv from "dotenv";
-
-dotenv.config();
-
-export type BursaEmailMapEntry = { username: string };
-
-export type AppConfig = {
-  port: number;
-  mondayToken: string;
-  bursaBase: string;
-  /** Shared password for Basic Auth (username comes from email map). */
-  bursaPassword: string;
-  mondayColumns: {
-    dealOwner: string;
-    error: string;
-    /** Status column "Publicare bursa" — only this column triggers the flow. */
-    publicationBursa: string;
-  };
-  publicationBursa: {
-    /** Exact label that starts publish flow. */
-    triggerLabel: string;
-    /** Status while work is in progress. */
-    processingLabel: string;
-    successLabel: string;
-    errorLabel: string;
-  };
-  flagsColumnId: string;
-  privateNoticeColumnId: string;
-  auth: {
-    /** Keys are normalized: trim + lowerCase. */
-    bursaUserMapByEmail: Record<string, BursaEmailMapEntry>;
-  };
-};
-
-const DEFAULT_BURSA_USER_MAP_BY_EMAIL: Record<string, BursaEmailMapEntry> = {
-  "alexandru.n@crystal-logistics-services.com": { username: "Transport.202501" },
-  "andrei.p@crystal-logistics-services.com": { username: "Transport.5253" },
-  "denisa.i@crystal-logistics-services.com": { username: "Transport.2601" },
-};
-
-function reqEnv(name: string): string {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing env var: ${name}`);
-  return v;
 }
 
 function normalizeEmailKey(email: string): string {
@@ -227,9 +110,7 @@ function parseBursaUserMapFromJson(raw: string): Record<string, BursaEmailMapEnt
     if (!key) continue;
     if (!entry || typeof entry !== "object") throw new Error(`Invalid map entry for "${email}"`);
     const username = (entry as { username?: unknown }).username;
-    if (typeof username !== "string" || !username.trim()) {
-      throw new Error(`Invalid username for "${email}"`);
-    }
+    if (typeof username !== "string" || !username.trim()) throw new Error(`Invalid username for "${email}"`);
     out[key] = { username: username.trim() };
   }
   return out;
@@ -237,9 +118,7 @@ function parseBursaUserMapFromJson(raw: string): Record<string, BursaEmailMapEnt
 
 function loadBursaUserMapByEmail(): Record<string, BursaEmailMapEntry> {
   const raw = process.env.BURSA_USER_MAP_BY_EMAIL_JSON?.trim();
-  if (!raw) {
-    return { ...DEFAULT_BURSA_USER_MAP_BY_EMAIL };
-  }
+  if (!raw) return { ...DEFAULT_BURSA_USER_MAP_BY_EMAIL };
   return parseBursaUserMapFromJson(raw);
 }
 
@@ -248,15 +127,29 @@ let cached: AppConfig | null = null;
 export function getConfig(): AppConfig {
   if (cached) return cached;
 
+  const enabledIntegrations = parseCsv((process.env.ENABLED_INTEGRATIONS || "123cargo,cargopedia").trim());
+  const isTransEuEnabled = enabledIntegrations.includes("transeu");
+
+  const flags = (process.env.FLAGS_COLUMN_ID || "").trim();
+  const privateNotice = (process.env.PRIVATE_NOTICE_COLUMN_ID || "").trim();
+
   cached = {
-    port: Number(process.env.PORT || 3000),
+    nodeEnv: (process.env.NODE_ENV || "development").trim(),
+    port: parseNumberEnv("PORT", 8080),
     mondayToken: reqEnv("MONDAY_TOKEN"),
-    bursaBase: reqEnv("BURSA_BASE"),
+    mondayApiUrl: (process.env.MONDAY_API_URL || "https://api.monday.com/v2").trim(),
+    bursaBase: reqEnv("BURSA_BASE").replace(/\/+$/, ""),
     bursaPassword: reqEnv("BURSA_PASSWORD"),
     mondayColumns: {
       dealOwner: reqEnv("DEAL_OWNER_COLUMN_ID"),
       error: reqEnv("ERROR_COLUMN_ID"),
       publicationBursa: process.env.PUBLICARE_BURSA_COLUMN_ID?.trim() || "color_mkyp8xqz",
+      tipMarfa: (process.env.TIP_MARFA_COLUMN_ID || "color_mksemxby").trim(),
+      ocupareCamion: (process.env.OCUPARE_CAMION_COLUMN_ID || "color_mkrb3hhk").trim(),
+      flags,
+      privateNotice,
+      externalLoadId: (process.env.EXTERNAL_LOAD_ID_COLUMN_ID || "").trim(),
+      twoStepLink: (process.env.TWO_STEP_LINK_COLUMN_ID || "").trim(),
     },
     publicationBursa: {
       triggerLabel: process.env.PUBLICARE_BURSA_TRIGGER_LABEL?.trim() || "Publica pe bursa",
@@ -264,12 +157,55 @@ export function getConfig(): AppConfig {
       successLabel: reqEnv("TRIGGER_STATUS_SUCCESS_LABEL"),
       errorLabel: reqEnv("TRIGGER_STATUS_ERROR_LABEL"),
     },
-    flagsColumnId: process.env.FLAGS_COLUMN_ID?.trim() || "",
-    privateNoticeColumnId: process.env.PRIVATE_NOTICE_COLUMN_ID?.trim() || "",
+    flagsColumnId: flags,
+    privateNoticeColumnId: privateNotice,
     auth: {
       bursaUserMapByEmail: loadBursaUserMapByEmail(),
+      forceTestMode: (process.env.FORCE_TEST_AUTH_MODE || "").trim() === "1",
+      testUsername: (process.env.TEST_BURSA_USERNAME || "").trim(),
+      testPassword: (process.env.TEST_BURSA_PASSWORD || "").trim(),
+    },
+    integrations: {
+      cargo123: {
+        defaultLoadingIntervalDays: parseNumberEnv("DEFAULT_LOADING_INTERVAL_DAYS", 1),
+      },
+      cargopedia: {
+        baseUrl: (process.env.CARGOPEDIA_BASE_URL || "").trim(),
+        apiKey: (process.env.CARGOPEDIA_API_KEY || "").trim(),
+        apiKeySecret: (process.env.CARGOPEDIA_API_KEY_SECRET || "").trim(),
+        userId: (process.env.CARGOPEDIA_USER_ID || "").trim(),
+        userIdSecret: (process.env.CARGOPEDIA_USER_ID_SECRET || "").trim(),
+      },
+      timocom: {
+        baseUrl: (process.env.TIMOCOM_BASE_URL || "").trim(),
+        apiToken: (process.env.TIMOCOM_API_TOKEN || "").trim(),
+        apiTokenSecret: (process.env.TIMOCOM_API_TOKEN_SECRET || "").trim(),
+      },
+      transeu: {
+        baseUrl: reqEnvWhen("TRANSEU_BASE_URL", isTransEuEnabled).replace(/\/+$/, ""),
+        clientId: reqEnvWhen("TRANSEU_CLIENT_ID", isTransEuEnabled),
+        clientSecret: reqEnvWhen("TRANSEU_CLIENT_SECRET", isTransEuEnabled),
+        apiKey: reqEnvWhen("TRANSEU_API_KEY", isTransEuEnabled),
+        accessToken: (process.env.TRANSEU_ACCESS_TOKEN || "").trim(),
+        refreshToken: (process.env.TRANSEU_REFRESH_TOKEN || "").trim(),
+        authCode: (process.env.TRANSEU_AUTH_CODE || "").trim(),
+        redirectUri: (process.env.TRANSEU_REDIRECT_URI || "").trim(),
+      },
+    },
+    enabledIntegrations,
+    twoStep: {
+      appBaseUrl: (process.env.APP_BASE_URL || "").trim(),
+      tokenSecret: (process.env.TWO_STEP_TOKEN_SECRET || reqEnv("MONDAY_TOKEN")).trim(),
+      tokenTtlSeconds: parseNumberEnv("TWO_STEP_TOKEN_TTL_SECONDS", parseNumberEnv("TWO_STEP_TICKET_TTL_SECONDS", 900)),
     },
   };
 
   return cached;
 }
+
+/** Backwards-compatible accessor for integrations that read `config` at runtime. */
+export const config: AppConfig = new Proxy({} as AppConfig, {
+  get(_target, prop: string | symbol) {
+    return getConfig()[prop as keyof AppConfig];
+  },
+});

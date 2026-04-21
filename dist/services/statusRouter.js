@@ -1,4 +1,4 @@
-/** Status lifecycle for the "Publicare bursa" column only. */
+/** Status lifecycle for the "Publicare bursa" column (`color_mkyp8xqz`) only. */
 export async function setPublicationProcessing(monday, cfg, boardId, itemId) {
     await monday.changeStatusLabel(boardId, itemId, cfg.mondayColumns.publicationBursa, cfg.publicationBursa.processingLabel);
 }
