@@ -66,10 +66,22 @@ export type AppConfig = {
 };
 
 const DEFAULT_BURSA_USER_MAP_BY_EMAIL: Record<string, BursaEmailMapEntry> = {
-  "alexandru.n@crystal-logistics-services.com": { username: "Transport.202501", password: "__REPLACE__" },
-  "andrei.p@crystal-logistics-services.com": { username: "Transport.5253", password: "__REPLACE__" },
-  "denisa.i@crystal-logistics-services.com": { username: "Transport.2601", password: "__REPLACE__" },
-  "diana.d@crystal-logistics-services.com": { username: "Transport.2026", password: "__REPLACE__" },
+  "alexandru.n@crystal-logistics-services.com": {
+    "username": "Transport.202501",
+    "password": "Transport.202501"
+  },
+  "andrei.p@crystal-logistics-services.com": {
+    "username": "Transport.5253",
+    "password": "Transport.5253"
+  },
+  "denisa.i@crystal-logistics-services.com": {
+    "username": "Transport.2601",
+    "password": "Transport.2601"
+  },
+  "diana.d@crystal-logistics-services.com": {
+    "username": "Transport.2026",
+    "password": "Transport.2026"
+  }
 };
 
 function reqEnv(name: string): string {
