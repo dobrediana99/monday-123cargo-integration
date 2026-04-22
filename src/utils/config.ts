@@ -70,6 +70,7 @@ const DEFAULT_BURSA_USER_MAP_BY_EMAIL: Record<string, BursaEmailMapEntry> = {
   "alexandru.n@crystal-logistics-services.com": { username: "Transport.202501" },
   "andrei.p@crystal-logistics-services.com": { username: "Transport.5253" },
   "denisa.i@crystal-logistics-services.com": { username: "Transport.2601" },
+  "diana.d@crystal-logistics-services.com": { username: "Transport.2026" },
 };
 
 function reqEnv(name: string): string {
