@@ -2,7 +2,7 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-export type BursaEmailMapEntry = { username: string; password: string };
+export type BursaEmailMapEntry = { password: string };
 
 export type AppConfig = {
   nodeEnv: string;
@@ -66,22 +66,10 @@ export type AppConfig = {
 };
 
 const DEFAULT_BURSA_USER_MAP_BY_EMAIL: Record<string, BursaEmailMapEntry> = {
-  "alexandru.n@crystal-logistics-services.com": {
-    "username": "Transport.202501",
-    "password": "Transport.202501"
-  },
-  "andrei.p@crystal-logistics-services.com": {
-    "username": "Transport.5253",
-    "password": "Transport.5253"
-  },
-  "denisa.i@crystal-logistics-services.com": {
-    "username": "Transport.2601",
-    "password": "Transport.2601"
-  },
-  "diana.d@crystal-logistics-services.com": {
-    "username": "Transport.2026",
-    "password": "Transport.2026"
-  }
+  "alexandru.n@crystal-logistics-services.com": { password: "Transport.202501" },
+  "andrei.p@crystal-logistics-services.com": { password: "Transport.5253" },
+  "denisa.i@crystal-logistics-services.com": { password: "Transport.2601" },
+  "diana.d@crystal-logistics-services.com": { password: "Transport.2026" },
 };
 
 function reqEnv(name: string): string {
@@ -121,11 +109,9 @@ function parseBursaUserMapFromJson(raw: string): Record<string, BursaEmailMapEnt
     const key = normalizeEmailKey(email);
     if (!key) continue;
     if (!entry || typeof entry !== "object") throw new Error(`Invalid map entry for "${email}"`);
-    const username = (entry as { username?: unknown }).username;
     const password = (entry as { password?: unknown }).password;
-    if (typeof username !== "string" || !username.trim()) throw new Error(`Invalid username for "${email}"`);
     if (typeof password !== "string" || !password.trim()) throw new Error(`Invalid password for "${email}"`);
-    out[key] = { username: username.trim(), password: password.trim() };
+    out[key] = { password: password.trim() };
   }
   return out;
 }

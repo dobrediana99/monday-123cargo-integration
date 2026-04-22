@@ -38,13 +38,13 @@ export async function resolveBasicAuthForBursa(monday, cols) {
     }
     const key = normalizeEmailKey(rawEmail);
     const mapped = cfg.auth.bursaUserMapByEmail[key];
-    if (!mapped?.username) {
+    if (!mapped) {
         return { ok: false, error: `Userul din Principal nu este configurat pentru Bursa: ${rawEmail}` };
     }
-    if (!mapped?.password) {
+    if (!mapped.password) {
         return { ok: false, error: `Userul din Principal nu are parola Bursa configurată: ${rawEmail}` };
     }
-    return { ok: true, authHeader: buildBasicAuthHeader(mapped.username, mapped.password) };
+    return { ok: true, authHeader: buildBasicAuthHeader(key, mapped.password) };
 }
 function colsFromContext(context) {
     return Object.fromEntries(context.item.column_values.map((c) => [c.id, c]));
