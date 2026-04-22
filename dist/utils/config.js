@@ -1,10 +1,10 @@
 import dotenv from "dotenv";
 dotenv.config();
 const DEFAULT_BURSA_USER_MAP_BY_EMAIL = {
-    "alexandru.n@crystal-logistics-services.com": { username: "Transport.202501" },
-    "andrei.p@crystal-logistics-services.com": { username: "Transport.5253" },
-    "denisa.i@crystal-logistics-services.com": { username: "Transport.2601" },
-    "diana.d@crystal-logistics-services.com": { username: "Transport.2026" },
+    "alexandru.n@crystal-logistics-services.com": { username: "Transport.202501", password: "__REPLACE__" },
+    "andrei.p@crystal-logistics-services.com": { username: "Transport.5253", password: "__REPLACE__" },
+    "denisa.i@crystal-logistics-services.com": { username: "Transport.2601", password: "__REPLACE__" },
+    "diana.d@crystal-logistics-services.com": { username: "Transport.2026", password: "__REPLACE__" },
 };
 function reqEnv(name) {
     const value = (process.env[name] || "").trim();
@@ -45,9 +45,12 @@ function parseBursaUserMapFromJson(raw) {
         if (!entry || typeof entry !== "object")
             throw new Error(`Invalid map entry for "${email}"`);
         const username = entry.username;
+        const password = entry.password;
         if (typeof username !== "string" || !username.trim())
             throw new Error(`Invalid username for "${email}"`);
-        out[key] = { username: username.trim() };
+        if (typeof password !== "string" || !password.trim())
+            throw new Error(`Invalid password for "${email}"`);
+        out[key] = { username: username.trim(), password: password.trim() };
     }
     return out;
 }
@@ -72,7 +75,6 @@ export function getConfig() {
         mondayToken: reqEnv("MONDAY_TOKEN"),
         mondayApiUrl: (process.env.MONDAY_API_URL || "https://api.monday.com/v2").trim(),
         bursaBase: reqEnv("BURSA_BASE").replace(/\/+$/, ""),
-        bursaPassword: reqEnvWhen("BURSA_PASSWORD", !forceTestMode),
         mondayColumns: {
             dealOwner: reqEnv("DEAL_OWNER_COLUMN_ID"),
             error: reqEnv("ERROR_COLUMN_ID"),

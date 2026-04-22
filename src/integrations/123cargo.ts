@@ -56,8 +56,11 @@ export async function resolveBasicAuthForBursa(
   if (!mapped?.username) {
     return { ok: false, error: `Userul din Principal nu este configurat pentru Bursa: ${rawEmail}` };
   }
+  if (!mapped?.password) {
+    return { ok: false, error: `Userul din Principal nu are parola Bursa configurată: ${rawEmail}` };
+  }
 
-  return { ok: true, authHeader: buildBasicAuthHeader(mapped.username, cfg.bursaPassword) };
+  return { ok: true, authHeader: buildBasicAuthHeader(mapped.username, mapped.password) };
 }
 
 function colsFromContext(context: IntegrationContext): Record<string, MondayColumnValue> {
