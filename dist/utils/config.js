@@ -64,13 +64,14 @@ export function getConfig() {
     const isTransEuEnabled = enabledIntegrations.includes("transeu");
     const flags = (process.env.FLAGS_COLUMN_ID || "").trim();
     const privateNotice = (process.env.PRIVATE_NOTICE_COLUMN_ID || "").trim();
+    const forceTestMode = (process.env.FORCE_TEST_AUTH_MODE || "").trim() === "1";
     cached = {
         nodeEnv: (process.env.NODE_ENV || "development").trim(),
         port: parseNumberEnv("PORT", 8080),
         mondayToken: reqEnv("MONDAY_TOKEN"),
         mondayApiUrl: (process.env.MONDAY_API_URL || "https://api.monday.com/v2").trim(),
         bursaBase: reqEnv("BURSA_BASE").replace(/\/+$/, ""),
-        bursaPassword: reqEnv("BURSA_PASSWORD"),
+        bursaPassword: reqEnvWhen("BURSA_PASSWORD", !forceTestMode),
         mondayColumns: {
             dealOwner: reqEnv("DEAL_OWNER_COLUMN_ID"),
             error: reqEnv("ERROR_COLUMN_ID"),
@@ -92,9 +93,9 @@ export function getConfig() {
         privateNoticeColumnId: privateNotice,
         auth: {
             bursaUserMapByEmail: loadBursaUserMapByEmail(),
-            forceTestMode: (process.env.FORCE_TEST_AUTH_MODE || "").trim() === "1",
-            testUsername: (process.env.TEST_BURSA_USERNAME || "").trim(),
-            testPassword: (process.env.TEST_BURSA_PASSWORD || "").trim(),
+            forceTestMode,
+            testUsername: reqEnvWhen("TEST_BURSA_USERNAME", forceTestMode),
+            testPassword: reqEnvWhen("TEST_BURSA_PASSWORD", forceTestMode),
         },
         integrations: {
             cargo123: {
