@@ -10,7 +10,7 @@ function normalizeEmailKey(email) {
     return email.trim().toLowerCase();
 }
 /**
- * Principal → Monday user → email → `bursaUserMapByEmail` → Basic Auth.
+ * Principal → Monday user → email → `bursaUserMapByEmail` (username+password) → Basic Auth.
  * No "Preluat de" fallback.
  */
 export async function resolveBasicAuthForBursa(monday, cols) {
@@ -39,12 +39,31 @@ export async function resolveBasicAuthForBursa(monday, cols) {
     const key = normalizeEmailKey(rawEmail);
     const mapped = cfg.auth.bursaUserMapByEmail[key];
     if (!mapped) {
+        logger.info("Bursa auth resolve", { principalEmail: rawEmail, mapKey: key, mapHit: false });
         return { ok: false, error: `Userul din Principal nu este configurat pentru Bursa: ${rawEmail}` };
     }
+    if (!mapped.username?.trim()) {
+        logger.info("Bursa auth resolve", { principalEmail: rawEmail, mapKey: key, mapHit: true, resolvedUsername: "" });
+        return { ok: false, error: `Userul din Principal nu are username Bursa configurat: ${rawEmail}` };
+    }
     if (!mapped.password) {
+        logger.info("Bursa auth resolve", {
+            principalEmail: rawEmail,
+            mapKey: key,
+            mapHit: true,
+            resolvedUsername: mapped.username.trim(),
+            hasPassword: false,
+        });
         return { ok: false, error: `Userul din Principal nu are parola Bursa configurată: ${rawEmail}` };
     }
-    return { ok: true, authHeader: buildBasicAuthHeader(key, mapped.password) };
+    logger.info("Bursa auth resolve", {
+        principalEmail: rawEmail,
+        mapKey: key,
+        mapHit: true,
+        resolvedUsername: mapped.username.trim(),
+        hasPassword: true,
+    });
+    return { ok: true, authHeader: buildBasicAuthHeader(mapped.username.trim(), mapped.password) };
 }
 function colsFromContext(context) {
     return Object.fromEntries(context.item.column_values.map((c) => [c.id, c]));

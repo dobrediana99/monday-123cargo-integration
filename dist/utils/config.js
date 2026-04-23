@@ -1,10 +1,10 @@
 import dotenv from "dotenv";
 dotenv.config();
 const DEFAULT_BURSA_USER_MAP_BY_EMAIL = {
-    "alexandru.n@crystal-logistics-services.com": { password: "Transport.202501" },
-    "andrei.p@crystal-logistics-services.com": { password: "Transport.5253" },
-    "denisa.i@crystal-logistics-services.com": { password: "Transport.2601" },
-    "diana.d@crystal-logistics-services.com": { password: "Transport.2026" },
+    "alexandru.n@crystal-logistics-services.com": { username: "Transport.202501", password: "Transport.202501" },
+    "andrei.p@crystal-logistics-services.com": { username: "Transport.5253", password: "Transport.5253" },
+    "denisa.i@crystal-logistics-services.com": { username: "denisa.i", password: "Transport.2601" },
+    "diana.d@crystal-logistics-services.com": { username: "Transport.2026", password: "Transport.2026" },
 };
 function reqEnv(name) {
     const value = (process.env[name] || "").trim();
@@ -45,9 +45,14 @@ function parseBursaUserMapFromJson(raw) {
         if (!entry || typeof entry !== "object")
             throw new Error(`Invalid map entry for "${email}"`);
         const password = entry.password;
+        const usernameRaw = entry.username;
         if (typeof password !== "string" || !password.trim())
             throw new Error(`Invalid password for "${email}"`);
-        out[key] = { password: password.trim() };
+        const username = typeof usernameRaw === "string" && usernameRaw.trim()
+            ? usernameRaw.trim()
+            : // Back-compat: if only password is provided, assume Bursa username equals the email local-part.
+                key.split("@")[0] || key;
+        out[key] = { username, password: password.trim() };
     }
     return out;
 }
