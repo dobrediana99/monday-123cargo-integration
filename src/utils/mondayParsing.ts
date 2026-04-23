@@ -5,6 +5,9 @@ export function colsToMap(columnValues: MondayColumnValue[]) {
 }
 
 export function getStatusLabel(col: MondayColumnValue | undefined): string {
+  const text = (col?.text ?? "").trim();
+  // Monday status columns typically expose the selected label via `text`.
+  if (text) return text;
   if (!col?.value) return "";
   try {
     const v = JSON.parse(col.value);

@@ -2,6 +2,10 @@ export function colsToMap(columnValues) {
     return Object.fromEntries(columnValues.map((c) => [c.id, c]));
 }
 export function getStatusLabel(col) {
+    const text = (col?.text ?? "").trim();
+    // Monday status columns typically expose the selected label via `text`.
+    if (text)
+        return text;
     if (!col?.value)
         return "";
     try {

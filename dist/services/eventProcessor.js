@@ -27,6 +27,9 @@ function buildTwoStepMessage(link) {
     }
     return `Trebuie sa introduci codul primit in email: AICI -> ${link}`;
 }
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
 export class EventProcessor {
     monday = new MondayClient();
     signTwoStepToken(payload) {
@@ -91,9 +94,42 @@ export class EventProcessor {
             return;
         }
         const { boardId, itemId } = ref;
-        const item = await this.monday.fetchItem(boardId, itemId);
-        const cols = colsToMap(item.column_values);
-        const currentLabel = getStatusLabel(cols[cfg.mondayColumns.publicationBursa]);
+        const publicationColId = cfg.mondayColumns.publicationBursa;
+        const expectedLabel = cfg.publicationBursa.triggerLabel;
+        // Monday can be eventually consistent right after the webhook event.
+        // If the status label reads empty, retry a couple of times before skipping.
+        let item = await this.monday.fetchItem(boardId, itemId);
+        let cols = colsToMap(item.column_values);
+        let rawCol = cols[publicationColId];
+        let currentLabel = getStatusLabel(rawCol);
+        if (!currentLabel) {
+            logger.info("Publication label empty after webhook; retrying read", {
+                triggerColumnId: ref.columnId,
+                publicationColId,
+                expectedLabel,
+                boardId,
+                itemId,
+                col: rawCol ? { id: rawCol.id, text: rawCol.text ?? null, value: rawCol.value ?? null } : null,
+            });
+            for (const delayMs of [250, 750, 1500]) {
+                await sleep(delayMs);
+                item = await this.monday.fetchItem(boardId, itemId);
+                cols = colsToMap(item.column_values);
+                rawCol = cols[publicationColId];
+                currentLabel = getStatusLabel(rawCol);
+                if (currentLabel)
+                    break;
+            }
+        }
+        logger.debug("Publication label check", {
+            triggerColumnId: ref.columnId,
+            publicationColId,
+            expectedLabel,
+            currentLabel,
+            boardId,
+            itemId,
+            col: rawCol ? { id: rawCol.id, text: rawCol.text ?? null, value: rawCol.value ?? null } : null,
+        });
         if (currentLabel !== cfg.publicationBursa.triggerLabel) {
             logger.info("Skipping webhook: publication label mismatch", { currentLabel });
             return;
