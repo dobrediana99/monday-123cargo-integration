@@ -1,10 +1,10 @@
 import dotenv from "dotenv";
 dotenv.config();
 const DEFAULT_BURSA_USER_MAP_BY_EMAIL = {
-    "alexandru.n@crystal-logistics-services.com": { username: "Transport.202501", password: "Transport.202501" },
-    "andrei.p@crystal-logistics-services.com": { username: "Transport.5253", password: "Transport.5253" },
+    "alexandru.n@crystal-logistics-services.com": { username: "alexandru.n", password: "Transport.202501" },
+    "andrei.p@crystal-logistics-services.com": { username: "andrei.p", password: "Transport.5253" },
     "denisa.i@crystal-logistics-services.com": { username: "denisa.i", password: "Transport.2601" },
-    "diana.d@crystal-logistics-services.com": { username: "Transport.2026", password: "Transport.2026" },
+    "diana.d@crystal-logistics-services.com": { username: "diana.d", password: "Transport.2026" },
 };
 function reqEnv(name) {
     const value = (process.env[name] || "").trim();
@@ -87,6 +87,7 @@ export function getConfig() {
             privateNotice,
             externalLoadId: (process.env.EXTERNAL_LOAD_ID_COLUMN_ID || "").trim(),
             twoStepLink: (process.env.TWO_STEP_LINK_COLUMN_ID || "").trim(),
+            bursaTwoStepEmailLink: (process.env.BURSA_2STEP_EMAIL_LINK_COLUMN_ID || "link_mm2p86g1").trim(),
         },
         publicationBursa: {
             triggerLabel: process.env.PUBLICARE_BURSA_TRIGGER_LABEL?.trim() || "Publica pe bursa",

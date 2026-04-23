@@ -20,12 +20,8 @@ function buildBaseUrlFromRequestMeta(meta) {
         return meta.baseUrl.replace(/\/+$/, "");
     return "";
 }
-function buildTwoStepMessage(link) {
-    const cfg = getConfig();
-    if (cfg.mondayColumns.twoStepLink) {
-        return "Trebuie sa introduci codul primit in email: AICI";
-    }
-    return `Trebuie sa introduci codul primit in email: AICI -> ${link}`;
+function buildTwoStepMessage(_link) {
+    return "Trebuie sa introduci codul primit in email/SMS. Foloseste linkul «AICI» din coloana «Cod email bursa».";
 }
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -73,6 +69,9 @@ export class EventProcessor {
         await this.monday.changeTextColumn(boardId, itemId, cfg.mondayColumns.error, "");
         if (cfg.mondayColumns.twoStepLink) {
             await this.monday.changeLinkColumn(boardId, itemId, cfg.mondayColumns.twoStepLink, "", "");
+        }
+        if (cfg.mondayColumns.bursaTwoStepEmailLink && cfg.mondayColumns.bursaTwoStepEmailLink !== cfg.mondayColumns.twoStepLink) {
+            await this.monday.changeLinkColumn(boardId, itemId, cfg.mondayColumns.bursaTwoStepEmailLink, "", "");
         }
     }
     buildTwoStepLink(meta, token) {
@@ -175,7 +174,10 @@ export class EventProcessor {
             const link = this.buildTwoStepLink(meta, token);
             const text = buildTwoStepMessage(link);
             await this.setPublicationErrorWithMessage(boardId, itemId, cfg.mondayColumns.publicationBursa, text);
-            if (cfg.mondayColumns.twoStepLink) {
+            if (cfg.mondayColumns.bursaTwoStepEmailLink) {
+                await this.monday.changeLinkColumn(boardId, itemId, cfg.mondayColumns.bursaTwoStepEmailLink, link, "AICI");
+            }
+            if (cfg.mondayColumns.twoStepLink && cfg.mondayColumns.twoStepLink !== cfg.mondayColumns.bursaTwoStepEmailLink) {
                 await this.monday.changeLinkColumn(boardId, itemId, cfg.mondayColumns.twoStepLink, link, "AICI");
             }
             logger.warn("Two-step required, waiting for user code", { boardId, itemId });
