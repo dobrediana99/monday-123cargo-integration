@@ -27,6 +27,9 @@ const UI_RO_TO_123CARGO_TRUCKTYPE: Record<string, { code: number; apiName: strin
   box: { code: 1, apiName: "Box" },
   prelata: { code: 2, apiName: "Tilt" },
   tilt: { code: 2, apiName: "Tilt" },
+  // Common English UI labels seen on boards
+  "40t mega truck (curtain-sided)": { code: 2, apiName: "Tilt" },
+  "mega truck (curtain-sided)": { code: 2, apiName: "Tilt" },
   platforma: { code: 3, apiName: "Flat" },
   flat: { code: 3, apiName: "Flat" },
   basculanta: { code: 5, apiName: "Tipper" },
@@ -91,6 +94,10 @@ export function mapTruckTypeFromMondayUi(labelRaw: string) {
   if (!key) return { ok: false as const, error: "Tip Mijloc Transport gol." };
   const mapped = UI_RO_TO_123CARGO_TRUCKTYPE[key];
   if (mapped === undefined) {
+    // Heuristic fallback for English dropdown labels like "Mega Truck (Curtain-Sided)".
+    if (key.includes("curtain") && (key.includes("truck") || key.includes("mega"))) {
+      return { ok: true as const, code: 2, apiName: "Tilt" };
+    }
     return { ok: false as const, error: `Tip Mijloc Transport necunoscut: '${labelRaw}'` };
   }
   if (mapped === null) {

@@ -41,22 +41,23 @@ export class MondayClient {
     }
     async changeTextColumn(boardId, itemId, columnId, text) {
         const trimmed = String(text ?? "");
+        // Text / long-text columns are unreliable with `change_column_value` + `{"text": ...}` on some boards;
+        // Monday documents `change_simple_column_value` for plain string updates.
         const m = `
-      mutation ($boardId: ID!, $itemId: ID!, $colId: String!, $val: JSON!) {
-        change_column_value(board_id:$boardId, item_id:$itemId, column_id:$colId, value:$val) { id }
+      mutation ($boardId: ID!, $itemId: ID!, $colId: String!, $val: String!) {
+        change_simple_column_value(board_id:$boardId, item_id:$itemId, column_id:$colId, value:$val) { id }
       }`;
-        const val = JSON.stringify({ text: trimmed });
         logger.info("Monday write: changeTextColumn", {
             boardId: String(boardId),
             itemId: String(itemId),
             columnId,
-            value: val,
+            value: trimmed,
         });
         return this.gql(m, {
             boardId: String(boardId),
             itemId: String(itemId),
             colId: columnId,
-            val,
+            val: trimmed,
         });
     }
     async changeStatusLabel(boardId, itemId, statusColId, label) {
