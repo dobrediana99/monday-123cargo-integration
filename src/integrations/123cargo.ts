@@ -212,7 +212,7 @@ async function publishLoad(context: IntegrationContext): Promise<IntegrationResu
   if (mapErrors.length) return toResultError("MAPPING", mapErrors);
 
   logger.info("Bursa publish debug: outgoing payload snapshot", {
-    loadingDate: (payload as { loadingDate?: unknown }).loadingDate,
+    loadingDateApi: (payload as { loadingDate?: unknown }).loadingDate,
     loadingInterval: (payload as { loadingInterval?: unknown }).loadingInterval,
     externalReference: (payload as { externalReference?: unknown }).externalReference,
   });
@@ -247,7 +247,7 @@ async function completeTwoStepPublish(context: IntegrationContext, code: string)
   if (mapErrors.length) return toResultError("MAPPING", mapErrors);
 
   logger.info("Bursa publish debug: outgoing payload snapshot (2-step)", {
-    loadingDate: (payload as { loadingDate?: unknown }).loadingDate,
+    loadingDateApi: (payload as { loadingDate?: unknown }).loadingDate,
     loadingInterval: (payload as { loadingInterval?: unknown }).loadingInterval,
     externalReference: (payload as { externalReference?: unknown }).externalReference,
   });

@@ -185,12 +185,17 @@ export function buildLoadPayload(cols, itemId) {
         }
     }
     const allowSameDayForLog = (process.env.BURSA_ALLOW_SAME_DAY_LOADING_DATE || "").trim() === "1";
+    const apiLoadingDate = loadingDate ? tryFormatYmdToRoDmy(loadingDate) : null;
+    if (loadingDate && !apiLoadingDate) {
+        errors.push(`Data Încărcare invalidă (nu poate fi formatată pentru Bursa): '${loadingDate}'`);
+    }
     logger.info("Bursa payload debug: loadingDate", {
         loadingDateColumnId: LOADING_DATE_COLUMN_ID,
         mondayDateColumn: loadingCol
             ? { id: loadingCol.id, text: loadingCol.text ?? null, value: loadingCol.value ?? null }
             : null,
         parsedLoadingDate: loadingDate,
+        apiLoadingDate,
         bucharestTodayYmd: ymdTodayEuropeBucharest(),
         bucharestMinYmd: addDaysYmd(ymdTodayEuropeBucharest(), allowSameDayForLog ? 0 : 1),
         bucharestMaxYmd: addDaysYmd(ymdTodayEuropeBucharest(), 30),
@@ -245,7 +250,6 @@ export function buildLoadPayload(cols, itemId) {
     const description = notes.length ? notes.join(" ") : "";
     const payload = {
         externalReference: Number(itemId),
-        loadingDate,
         loadingInterval: Math.trunc(loadingInterval),
         requiredTruck: uniqueRequiredTruck,
         weight,
@@ -257,6 +261,9 @@ export function buildLoadPayload(cols, itemId) {
         description: description || undefined,
         privateNotice: undefined,
     };
+    // Bursa / 123cargo API expects Romanian date format (DD-MM-YYYY), not ISO YYYY-MM-DD.
+    if (apiLoadingDate)
+        payload.loadingDate = apiLoadingDate;
     if (cfg.privateNoticeColumnId) {
         const pn = (cols[cfg.privateNoticeColumnId]?.text ?? "").trim();
         payload.privateNotice = pn || (description ? description : undefined);
@@ -266,6 +273,15 @@ export function buildLoadPayload(cols, itemId) {
             delete payload[k];
     }
     return { payload, errors };
+}
+function tryFormatYmdToRoDmy(ymd) {
+    const { y, m, d } = parseYmd(ymd);
+    if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d))
+        return null;
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d)
+        return null;
+    return `${String(d).padStart(2, "0")}-${String(m).padStart(2, "0")}-${String(y).padStart(4, "0")}`;
 }
 function ymdTodayEuropeBucharest(now = new Date()) {
     // en-CA yields YYYY-MM-DD in most runtimes for calendar dates.

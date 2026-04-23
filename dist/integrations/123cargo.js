@@ -188,7 +188,7 @@ async function publishLoad(context) {
     if (mapErrors.length)
         return toResultError("MAPPING", mapErrors);
     logger.info("Bursa publish debug: outgoing payload snapshot", {
-        loadingDate: payload.loadingDate,
+        loadingDateApi: payload.loadingDate,
         loadingInterval: payload.loadingInterval,
         externalReference: payload.externalReference,
     });
@@ -219,7 +219,7 @@ async function completeTwoStepPublish(context, code) {
     if (mapErrors.length)
         return toResultError("MAPPING", mapErrors);
     logger.info("Bursa publish debug: outgoing payload snapshot (2-step)", {
-        loadingDate: payload.loadingDate,
+        loadingDateApi: payload.loadingDate,
         loadingInterval: payload.loadingInterval,
         externalReference: payload.externalReference,
     });
