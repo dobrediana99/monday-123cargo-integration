@@ -136,11 +136,10 @@ export function validateRequired(cols) {
     }
     if (!isNonEmptyText("date_mkx77z0m"))
         errors.push("Data Inc. este obligatorie.");
-    const zileTxt = (cols["numeric_mkypzwfe"]?.text ?? "").trim();
+    // Default to 1 day if missing/0/invalid in Monday.
+    const zileTxt = (cols["numeric_mm2m66q1"]?.text ?? "").trim();
     const zile = parseNumberLoose(zileTxt);
-    if (!zileTxt || !Number.isFinite(zile) || zile <= 0) {
-        errors.push("Nr. zile valabile Incarcare trebuie sa fie un numar > 0.");
-    }
+    void zile; // value is used in payload build (defaults to 1); no hard validation here.
     if (!isNonEmptyText("dropdown_mkx1s5nv"))
         errors.push("Tip Mijloc Transport este obligatoriu.");
     return errors;
@@ -154,7 +153,7 @@ export function buildLoadPayload(cols, itemId) {
     const dstCity = (cols["text_mkypxb8h"]?.text ?? "").trim();
     const weightTxt = (cols["text_mkt9nr81"]?.text ?? "").trim();
     const loadingDate = getDateISOFromDateColumn(cols["date_mkx77z0m"]);
-    const loadingIntervalTxt = (cols["numeric_mkypzwfe"]?.text ?? "").trim();
+    const loadingIntervalTxt = (cols["numeric_mm2m66q1"]?.text ?? "").trim();
     const transportLabel = (cols["dropdown_mkx1s5nv"]?.text ?? "").trim();
     const budgetTxt = (cols["numeric_mkr4e4qc"]?.text ?? "").trim();
     const currencyTxt = (cols["color_mksh2abx"]?.text ?? "").trim();
@@ -162,10 +161,8 @@ export function buildLoadPayload(cols, itemId) {
     const flags = parseFlagsFromText(flagsRaw);
     if (!loadingDate)
         errors.push("Data Inc. invalidă (loadingDate).");
-    const loadingInterval = parseNumberLoose(loadingIntervalTxt);
-    if (!Number.isFinite(loadingInterval) || loadingInterval <= 0) {
-        errors.push("Nr. zile valabile Incarcare invalid (loadingInterval).");
-    }
+    const loadingIntervalRaw = parseNumberLoose(loadingIntervalTxt);
+    const loadingInterval = Number.isFinite(loadingIntervalRaw) && loadingIntervalRaw > 0 ? loadingIntervalRaw : 1;
     const weight = parseNumberLoose(weightTxt);
     if (!Number.isFinite(weight) || weight <= 0)
         errors.push("Greutate invalidă (weight).");
