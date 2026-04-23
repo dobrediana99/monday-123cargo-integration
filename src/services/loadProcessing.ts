@@ -182,9 +182,9 @@ export function buildLoadPayload(cols: Record<string, MondayColumnValue>, itemId
   const errors: string[] = [];
 
   const srcCountryRaw = (cols["dropdown_mkx6jyjf"]?.text ?? "").trim();
-  const srcCity = (cols["text_mkypcczr"]?.text ?? "").trim();
+  const srcLocalityRaw = (cols["text_mkypcczr"]?.text ?? "").trim();
   const dstCountryRaw = (cols["dropdown_mkx687jv"]?.text ?? "").trim();
-  const dstCity = (cols["text_mkypxb8h"]?.text ?? "").trim();
+  const dstLocalityRaw = (cols["text_mkypxb8h"]?.text ?? "").trim();
   const weightTxt = (cols["text_mkt9nr81"]?.text ?? "").trim();
   const LOADING_DATE_COLUMN_ID = "date_mkx77z0m";
   const loadingCol = cols[LOADING_DATE_COLUMN_ID];
@@ -242,11 +242,26 @@ export function buildLoadPayload(cols: Record<string, MondayColumnValue>, itemId
 
   const srcCountry = normalizeCountry2LetterEnglish(srcCountryRaw);
   if (!srcCountry) errors.push(`Țara Încărcare nu se poate mapa la ISO2: '${srcCountryRaw}'`);
-  if (!srcCity) errors.push("Localitate Încărcare lipsă (source.name).");
+  if (!srcLocalityRaw) errors.push("Localitate Încărcare lipsă (source.name).");
 
   const dstCountry = normalizeCountry2LetterEnglish(dstCountryRaw);
   if (!dstCountry) errors.push(`Țara Descărcare nu se poate mapa la ISO2: '${dstCountryRaw}'`);
-  if (!dstCity) errors.push("Localitate Descărcare lipsă (destination.name).");
+  if (!dstLocalityRaw) errors.push("Localitate Descărcare lipsă (destination.name).");
+
+  const srcCity = bursaPlaceNameFromLocality(srcLocalityRaw, srcCountry);
+  const dstCity = bursaPlaceNameFromLocality(dstLocalityRaw, dstCountry);
+
+  logger.info("Bursa payload debug: places", {
+    srcLocalityRaw,
+    srcCountryRaw,
+    srcCountry,
+    srcPlaceName: srcCity,
+    dstLocalityRaw,
+    dstCountryRaw,
+    dstCountry,
+    dstPlaceName: dstCity,
+    itemId,
+  });
 
   const tt = mapTruckTypeFromMondayUi(transportLabel);
   if (!tt.ok) errors.push(tt.error);
@@ -264,6 +279,18 @@ export function buildLoadPayload(cols: Record<string, MondayColumnValue>, itemId
   if (uniqueRequiredTruck.length === 0) errors.push("requiredTruck invalid (gol).");
 
   const notes: string[] = [];
+  const srcAddrCol = (process.env.LOADING_ADDRESS_COLUMN_ID || "").trim();
+  const dstAddrCol = (process.env.UNLOADING_ADDRESS_COLUMN_ID || "").trim();
+  const srcAddr = srcAddrCol ? (cols[srcAddrCol]?.text ?? "").trim() : "";
+  const dstAddr = dstAddrCol ? (cols[dstAddrCol]?.text ?? "").trim() : "";
+  if (srcAddr) notes.push(`Adresa încărcare: ${srcAddr}`);
+  if (dstAddr) notes.push(`Adresa descărcare: ${dstAddr}`);
+  if (looksLikeFullAddress(srcLocalityRaw) && srcLocalityRaw !== srcCity) {
+    notes.push(`Localitate încărcare (raw): ${srcLocalityRaw}`);
+  }
+  if (looksLikeFullAddress(dstLocalityRaw) && dstLocalityRaw !== dstCity) {
+    notes.push(`Localitate descărcare (raw): ${dstLocalityRaw}`);
+  }
   if (flagsRaw) notes.push(`Cerințe: ${flagsRaw}`);
   else {
     if (flags.slidingFloor) notes.push("Necesar: podea culisantă (sliding floor).");
@@ -290,6 +317,12 @@ export function buildLoadPayload(cols: Record<string, MondayColumnValue>, itemId
   // Bursa / 123cargo API expects Romanian date format (DD-MM-YYYY), not ISO YYYY-MM-DD.
   if (apiLoadingDate) payload.loadingDate = apiLoadingDate;
 
+  logger.info("Bursa payload debug: places(final)", {
+    source: payload.source,
+    destination: payload.destination,
+    itemId,
+  });
+
   if (cfg.privateNoticeColumnId) {
     const pn = (cols[cfg.privateNoticeColumnId]?.text ?? "").trim();
     payload.privateNotice = pn || (description ? description : undefined);
@@ -300,6 +333,76 @@ export function buildLoadPayload(cols: Record<string, MondayColumnValue>, itemId
   }
 
   return { payload, errors };
+}
+
+function looksLikeFullAddress(raw: string): boolean {
+  const t = raw.trim().toLowerCase();
+  if (!t) return false;
+  if (t.includes("str.")) return true;
+  if (t.includes("strada")) return true;
+  if (/\bnr\.?\b/.test(t)) return true;
+  if (/\bsector\b/.test(t)) return true;
+  if (/\bvia\b/.test(t)) return true;
+  if (t.includes("/")) return true;
+  if ((raw.match(/,/g) || []).length >= 3) return true;
+  return false;
+}
+
+/**
+ * Bursa `/loads` expects `place.name` to be a city/locality, not a full street address.
+ * We still read Monday's locality columns, but normalize common "address-in-locality-field" shapes.
+ */
+function bursaPlaceNameFromLocality(rawLocality: string, countryIso2: string | null): string {
+  const raw = rawLocality.trim();
+  if (!raw) return "";
+
+  const c = (countryIso2 || "").toUpperCase();
+
+  // Romania: pick the segment that contains a major city token (esp. Bucuresti) if present.
+  if (c === "RO") {
+    const parts = raw
+      .split(",")
+      .map((p) => p.trim())
+      .filter(Boolean);
+    if (parts.some((p) => normalizeRoLabel(p).includes("bucuresti"))) {
+      return "Bucuresti";
+    }
+    // Fallback: last comma-separated chunk is often "City, Romania" or "Sector X, Bucuresti"
+    const last = parts[parts.length - 1] || raw;
+    return normalizeCityCasing(last.replace(/\bRomania\b/gi, "").trim());
+  }
+
+  // Italy / generic EU-ish: "..., Naturno 39025 / BZ, Italy" → "Naturno"
+  if (c === "IT" || /\bItaly\b/i.test(raw)) {
+    const italyIdx = raw.toLowerCase().lastIndexOf("italy");
+    const head = (italyIdx >= 0 ? raw.slice(0, italyIdx) : raw).trim();
+    const slashParts = head
+      .split("/")
+      .map((p) => p.trim())
+      .filter(Boolean);
+    const tail = slashParts[slashParts.length - 1] || head;
+    const m = tail.match(/^(.+?)\s+\d{3,6}\b/); // "Naturno 39025" (+ optional "BZ")
+    const city = (m?.[1] ? m[1] : tail).trim();
+    return normalizeCityCasing(city.replace(/\bBZ\b/gi, "").trim());
+  }
+
+  // Generic: if it's comma-heavy, use the last segment as a best-effort city.
+  if ((raw.match(/,/g) || []).length >= 2) {
+    const parts = raw
+      .split(",")
+      .map((p) => p.trim())
+      .filter(Boolean);
+    return normalizeCityCasing(parts[parts.length - 1] || raw);
+  }
+
+  return normalizeCityCasing(raw);
+}
+
+function normalizeCityCasing(city: string): string {
+  const t = city.trim();
+  if (!t) return "";
+  // Keep diacritics as provided by Monday; only normalize whitespace.
+  return t.replace(/\s+/g, " ");
 }
 
 function tryFormatYmdToRoDmy(ymd: string): string | null {
