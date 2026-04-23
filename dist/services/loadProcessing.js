@@ -174,11 +174,17 @@ export function buildLoadPayload(cols, itemId) {
     // Bursa commonly enforces: loading date must be within ~30 days from "today".
     // We validate using Europe/Bucharest calendar day boundaries (closer to how ops think about dates).
     if (loadingDate) {
-        const cmp = compareYmdToBucharestWindow(loadingDate, 30);
+        // Empirically, Bursa can reject *same-day* loading with the same error text as "outside 30 days".
+        // Default: treat the allowed window as tomorrow (RO) .. today+30 (RO), inclusive.
+        // Override with `BURSA_ALLOW_SAME_DAY_LOADING_DATE=1` if your Bursa tenant accepts same-day loading.
+        const allowSameDay = (process.env.BURSA_ALLOW_SAME_DAY_LOADING_DATE || "").trim() === "1";
+        const minOffsetDaysFromToday = allowSameDay ? 0 : 1;
+        const cmp = compareYmdToBucharestWindow(loadingDate, { minOffsetDaysFromToday, maxFutureDaysFromToday: 30 });
         if (!cmp.ok) {
-            errors.push(`Data Încărcare invalidă pentru Bursa: ${cmp.reason} (trimis: '${loadingDate}', azi RO: '${cmp.todayRo}', max +30z: '${cmp.maxRo}')`);
+            errors.push(`Data Încărcare invalidă pentru Bursa: ${cmp.reason} (trimis: '${loadingDate}', azi RO: '${cmp.todayRo}', min: '${cmp.minRo}', max: '${cmp.maxRo}')`);
         }
     }
+    const allowSameDayForLog = (process.env.BURSA_ALLOW_SAME_DAY_LOADING_DATE || "").trim() === "1";
     logger.info("Bursa payload debug: loadingDate", {
         loadingDateColumnId: LOADING_DATE_COLUMN_ID,
         mondayDateColumn: loadingCol
@@ -186,7 +192,9 @@ export function buildLoadPayload(cols, itemId) {
             : null,
         parsedLoadingDate: loadingDate,
         bucharestTodayYmd: ymdTodayEuropeBucharest(),
+        bucharestMinYmd: addDaysYmd(ymdTodayEuropeBucharest(), allowSameDayForLog ? 0 : 1),
         bucharestMaxYmd: addDaysYmd(ymdTodayEuropeBucharest(), 30),
+        allowSameDayLoadingDate: allowSameDayForLog,
         itemId,
     });
     const loadingIntervalRaw = parseNumberLoose(loadingIntervalTxt);
@@ -284,17 +292,18 @@ function ymdToUtcDate(ymd) {
         return null;
     return dt;
 }
-function compareYmdToBucharestWindow(loadingYmd, maxFutureDays) {
+function compareYmdToBucharestWindow(loadingYmd, opts) {
     const todayRo = ymdTodayEuropeBucharest();
-    const maxRo = addDaysYmd(todayRo, maxFutureDays);
+    const minRo = addDaysYmd(todayRo, opts.minOffsetDaysFromToday);
+    const maxRo = addDaysYmd(todayRo, opts.maxFutureDaysFromToday);
     const a = ymdToUtcDate(loadingYmd);
-    const t0 = ymdToUtcDate(todayRo);
-    const t1 = ymdToUtcDate(maxRo);
-    if (!a || !t0 || !t1)
-        return { ok: false, reason: "format invalid", todayRo, maxRo };
-    if (a < t0)
-        return { ok: false, reason: "înainte de azi (RO)", todayRo, maxRo };
-    if (a > t1)
-        return { ok: false, reason: "peste fereastra permisă (+30 zile față de azi RO)", todayRo, maxRo };
+    const tMin = ymdToUtcDate(minRo);
+    const tMax = ymdToUtcDate(maxRo);
+    if (!a || !tMin || !tMax)
+        return { ok: false, reason: "format invalid", todayRo, minRo, maxRo };
+    if (a < tMin)
+        return { ok: false, reason: "prea devreme pentru Bursa (minim mâine în RO)", todayRo, minRo, maxRo };
+    if (a > tMax)
+        return { ok: false, reason: "peste fereastra permisă (+30 zile față de azi RO)", todayRo, minRo, maxRo };
     return { ok: true };
 }

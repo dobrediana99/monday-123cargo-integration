@@ -108,6 +108,7 @@ function extractTwoStepCookie(data, setCookieHeader) {
 }
 async function postLoad(authHeader, payload, twoStepCookie) {
     const base = getConfig().bursaBase;
+    logger.info("Bursa /loads outgoing payload (redacted)", { payload: redactBursaLoadsPayload(payload) });
     return axios.post(`${base}/loads`, payload, {
         headers: {
             "Content-Type": "application/json",
@@ -117,6 +118,24 @@ async function postLoad(authHeader, payload, twoStepCookie) {
         },
         validateStatus: () => true,
     });
+}
+function redactBursaLoadsPayload(payload) {
+    if (!payload || typeof payload !== "object")
+        return { _rawType: typeof payload };
+    const p = payload;
+    const out = { ...p };
+    const redactString = (key, max = 240) => {
+        const v = out[key];
+        if (typeof v !== "string")
+            return;
+        if (v.length <= max)
+            return;
+        out[key] = `${v.slice(0, max)}…[redacted:${v.length}chars]`;
+    };
+    redactString("description", 240);
+    redactString("privateNotice", 240);
+    // Avoid logging full nested objects verbatim if they grow; shallow copy is enough for diagnostics.
+    return out;
 }
 export async function postBursaLoad(authHeader, payload) {
     return postLoad(authHeader, payload);
