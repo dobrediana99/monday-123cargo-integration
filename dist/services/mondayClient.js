@@ -25,14 +25,14 @@ export class MondayClient {
     }
     async fetchItem(boardId, itemId) {
         const q = `
-      query ($boardId:[Int], $itemId:[Int]) {
+      query ($boardId: [ID!], $itemId: [ID!]) {
         boards(ids:$boardId) {
           items_page(limit:1, query_params:{ ids:$itemId }) {
             items { id name column_values { id text value } }
           }
         }
       }`;
-        const data = await this.gql(q, { boardId: [Number(boardId)], itemId: [Number(itemId)] });
+        const data = await this.gql(q, { boardId: [String(boardId)], itemId: [String(itemId)] });
         const item = data?.boards?.[0]?.items_page?.items?.[0];
         if (!item)
             throw new Error("Item not found in monday");
@@ -40,36 +40,36 @@ export class MondayClient {
     }
     async changeTextColumn(boardId, itemId, columnId, text) {
         const m = `
-      mutation ($boardId:Int!, $itemId:Int!, $colId:String!, $val:JSON!) {
+      mutation ($boardId: ID!, $itemId: ID!, $colId: String!, $val: JSON!) {
         change_column_value(board_id:$boardId, item_id:$itemId, column_id:$colId, value:$val) { id }
       }`;
         return this.gql(m, {
-            boardId: Number(boardId),
-            itemId: Number(itemId),
+            boardId: String(boardId),
+            itemId: String(itemId),
             colId: columnId,
             val: JSON.stringify({ text }),
         });
     }
     async changeStatusLabel(boardId, itemId, statusColId, label) {
         const m = `
-      mutation ($boardId:Int!, $itemId:Int!, $colId:String!, $val:JSON!) {
+      mutation ($boardId: ID!, $itemId: ID!, $colId: String!, $val: JSON!) {
         change_column_value(board_id:$boardId, item_id:$itemId, column_id:$colId, value:$val) { id }
       }`;
         return this.gql(m, {
-            boardId: Number(boardId),
-            itemId: Number(itemId),
+            boardId: String(boardId),
+            itemId: String(itemId),
             colId: statusColId,
             val: JSON.stringify({ label }),
         });
     }
     async changeLinkColumn(boardId, itemId, columnId, url, text) {
         const m = `
-      mutation ($boardId:Int!, $itemId:Int!, $colId:String!, $val:JSON!) {
+      mutation ($boardId: ID!, $itemId: ID!, $colId: String!, $val: JSON!) {
         change_column_value(board_id:$boardId, item_id:$itemId, column_id:$colId, value:$val) { id }
       }`;
         return this.gql(m, {
-            boardId: Number(boardId),
-            itemId: Number(itemId),
+            boardId: String(boardId),
+            itemId: String(itemId),
             colId: columnId,
             val: JSON.stringify({ url, text }),
         });
