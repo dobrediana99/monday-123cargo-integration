@@ -68,7 +68,7 @@ export type AppConfig = {
 const DEFAULT_BURSA_USER_MAP_BY_EMAIL: Record<string, BursaEmailMapEntry> = {
   "alexandru.n@crystal-logistics-services.com": { password: "Transport.202501" },
   "andrei.p@crystal-logistics-services.com": { password: "Transport.5253" },
-  "denisa.i@crystal-logistics-services.com": { password: "Transport.2601" },
+  "denisa.i": { password: "Transport.2601" },
   "diana.d@crystal-logistics-services.com": { password: "Transport.2026" },
 };
 
