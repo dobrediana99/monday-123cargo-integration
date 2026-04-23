@@ -61,12 +61,58 @@ export function getDateISOFromDateColumn(col: MondayColumnValue | undefined): st
   if (!col) return null;
   if (col.value) {
     try {
-      const v = JSON.parse(col.value);
-      if (v?.date) return String(v.date);
+      const v = JSON.parse(col.value) as { date?: unknown; time?: unknown; changed_at?: unknown };
+      if (typeof v?.date === "string" && v.date.trim()) {
+        const normalized = normalizeYyyyMmDd(v.date.trim());
+        if (normalized) return normalized;
+      }
     } catch {
       /* ignore */
     }
   }
   const t = (col.text ?? "").trim();
-  return t || null;
+  return normalizeYyyyMmDd(t) || null;
+}
+
+function normalizeYyyyMmDd(raw: string): string | null {
+  const s = raw.trim();
+  if (!s) return null;
+
+  // Already ISO date (optionally with time suffix)
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) {
+    const y = Number(iso[1]);
+    const m = Number(iso[2]);
+    const d = Number(iso[3]);
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    if (dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d) {
+      return `${String(y).padStart(4, "0")}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    }
+  }
+
+  // DD-MM-YYYY (common Monday display formats)
+  const dmy = s.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (dmy) {
+    const d = Number(dmy[1]);
+    const m = Number(dmy[2]);
+    const y = Number(dmy[3]);
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    if (dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d) {
+      return `${String(y).padStart(4, "0")}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    }
+  }
+
+  // DD/MM/YYYY
+  const dmySlash = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (dmySlash) {
+    const d = Number(dmySlash[1]);
+    const m = Number(dmySlash[2]);
+    const y = Number(dmySlash[3]);
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    if (dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d) {
+      return `${String(y).padStart(4, "0")}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    }
+  }
+
+  return null;
 }

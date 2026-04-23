@@ -168,6 +168,11 @@ async function publishLoad(context) {
     const { payload, errors: mapErrors } = buildLoadPayload(cols, Number(context.itemId));
     if (mapErrors.length)
         return toResultError("MAPPING", mapErrors);
+    logger.info("Bursa publish debug: outgoing payload snapshot", {
+        loadingDate: payload.loadingDate,
+        loadingInterval: payload.loadingInterval,
+        externalReference: payload.externalReference,
+    });
     const response = await postLoad(auth.authHeader, payload);
     if (bursaResponseRequiresTwoStep(response.status, response.data)) {
         return { status: "requires_two_step", message: "[2STEP] Bursa solicită cod de autentificare." };
@@ -194,6 +199,11 @@ async function completeTwoStepPublish(context, code) {
     const { payload, errors: mapErrors } = buildLoadPayload(cols, Number(context.itemId));
     if (mapErrors.length)
         return toResultError("MAPPING", mapErrors);
+    logger.info("Bursa publish debug: outgoing payload snapshot (2-step)", {
+        loadingDate: payload.loadingDate,
+        loadingInterval: payload.loadingInterval,
+        externalReference: payload.externalReference,
+    });
     const authRes = await submitTwoStepCode(auth.authHeader, code.trim());
     const authOk = authRes.status === 200 && authRes.data?.resultCode === 0;
     if (!authOk) {

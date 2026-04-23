@@ -3,6 +3,7 @@ import { createRequire } from "module";
 
 import type { MondayColumnValue } from "./mondayClient.js";
 import { getConfig } from "../utils/config.js";
+import { logger } from "../utils/logger.js";
 import {
   getDateISOFromDateColumn,
   getFirstPersonIdFromPeopleValue,
@@ -185,7 +186,9 @@ export function buildLoadPayload(cols: Record<string, MondayColumnValue>, itemId
   const dstCountryRaw = (cols["dropdown_mkx687jv"]?.text ?? "").trim();
   const dstCity = (cols["text_mkypxb8h"]?.text ?? "").trim();
   const weightTxt = (cols["text_mkt9nr81"]?.text ?? "").trim();
-  const loadingDate = getDateISOFromDateColumn(cols["date_mkx77z0m"]);
+  const LOADING_DATE_COLUMN_ID = "date_mkx77z0m";
+  const loadingCol = cols[LOADING_DATE_COLUMN_ID];
+  const loadingDate = getDateISOFromDateColumn(loadingCol);
   const loadingIntervalTxt = (cols["numeric_mm2m66q1"]?.text ?? "").trim();
   const transportLabel = (cols["dropdown_mkx1s5nv"]?.text ?? "").trim();
   const budgetTxt = (cols["numeric_mkr4e4qc"]?.text ?? "").trim();
@@ -195,6 +198,28 @@ export function buildLoadPayload(cols: Record<string, MondayColumnValue>, itemId
   const flags = parseFlagsFromText(flagsRaw);
 
   if (!loadingDate) errors.push("Data Inc. invalidă (loadingDate).");
+
+  // Bursa commonly enforces: loading date must be within ~30 days from "today".
+  // We validate using Europe/Bucharest calendar day boundaries (closer to how ops think about dates).
+  if (loadingDate) {
+    const cmp = compareYmdToBucharestWindow(loadingDate, 30);
+    if (!cmp.ok) {
+      errors.push(
+        `Data Încărcare invalidă pentru Bursa: ${cmp.reason} (trimis: '${loadingDate}', azi RO: '${cmp.todayRo}', max +30z: '${cmp.maxRo}')`
+      );
+    }
+  }
+
+  logger.info("Bursa payload debug: loadingDate", {
+    loadingDateColumnId: LOADING_DATE_COLUMN_ID,
+    mondayDateColumn: loadingCol
+      ? { id: loadingCol.id, text: loadingCol.text ?? null, value: loadingCol.value ?? null }
+      : null,
+    parsedLoadingDate: loadingDate,
+    bucharestTodayYmd: ymdTodayEuropeBucharest(),
+    bucharestMaxYmd: addDaysYmd(ymdTodayEuropeBucharest(), 30),
+    itemId,
+  });
 
   const loadingIntervalRaw = parseNumberLoose(loadingIntervalTxt);
   const loadingInterval = Number.isFinite(loadingIntervalRaw) && loadingIntervalRaw > 0 ? loadingIntervalRaw : 1;
@@ -260,4 +285,51 @@ export function buildLoadPayload(cols: Record<string, MondayColumnValue>, itemId
   }
 
   return { payload, errors };
+}
+
+function ymdTodayEuropeBucharest(now: Date = new Date()): string {
+  // en-CA yields YYYY-MM-DD in most runtimes for calendar dates.
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Bucharest", year: "numeric", month: "2-digit", day: "2-digit" }).format(
+    now
+  );
+}
+
+function addDaysYmd(ymd: string, days: number): string {
+  const { y, m, d } = parseYmd(ymd);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return `${String(dt.getUTCFullYear()).padStart(4, "0")}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(
+    dt.getUTCDate()
+  ).padStart(2, "0")}`;
+}
+
+function parseYmd(ymd: string): { y: number; m: number; d: number } {
+  const m = ymd.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return { y: NaN, m: NaN, d: NaN };
+  return { y: Number(m[1]), m: Number(m[2]), d: Number(m[3]) };
+}
+
+function ymdToUtcDate(ymd: string): Date | null {
+  const { y, m, d } = parseYmd(ymd);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return null;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
+  return dt;
+}
+
+function compareYmdToBucharestWindow(
+  loadingYmd: string,
+  maxFutureDays: number
+): { ok: true } | { ok: false; reason: string; todayRo: string; maxRo: string } {
+  const todayRo = ymdTodayEuropeBucharest();
+  const maxRo = addDaysYmd(todayRo, maxFutureDays);
+
+  const a = ymdToUtcDate(loadingYmd);
+  const t0 = ymdToUtcDate(todayRo);
+  const t1 = ymdToUtcDate(maxRo);
+  if (!a || !t0 || !t1) return { ok: false, reason: "format invalid", todayRo, maxRo };
+
+  if (a < t0) return { ok: false, reason: "înainte de azi (RO)", todayRo, maxRo };
+  if (a > t1) return { ok: false, reason: "peste fereastra permisă (+30 zile față de azi RO)", todayRo, maxRo };
+  return { ok: true };
 }
