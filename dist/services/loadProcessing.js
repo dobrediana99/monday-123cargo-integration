@@ -129,14 +129,20 @@ export function validateRequired(cols) {
     }
     if (!isNonEmptyText("color_mksh2abx"))
         errors.push("Moneda este obligatorie.");
-    if (!isNonEmptyText("dropdown_mkx6jyjf"))
-        errors.push("Tara Incarcare este obligatorie.");
-    if (!isNonEmptyText("text_mkypcczr"))
-        errors.push("Localitate Incarcare este obligatorie.");
-    if (!isNonEmptyText("dropdown_mkx687jv"))
-        errors.push("Tara Descarcare este obligatorie.");
-    if (!isNonEmptyText("text_mkypxb8h"))
-        errors.push("Localitate Descarcare este obligatorie.");
+    const loadingAddrOk = cfg.mondayColumns.loadingAddress ? isNonEmptyText(cfg.mondayColumns.loadingAddress) : false;
+    const unloadingAddrOk = cfg.mondayColumns.unloadingAddress ? isNonEmptyText(cfg.mondayColumns.unloadingAddress) : false;
+    if (!isNonEmptyText("dropdown_mkx6jyjf") && !loadingAddrOk) {
+        errors.push("Tara Incarcare este obligatorie (sau completează «Adresa Incarcare» dacă e configurată în integrare).");
+    }
+    if (!isNonEmptyText("text_mkypcczr") && !loadingAddrOk) {
+        errors.push("Localitate Incarcare este obligatorie (sau completează «Adresa Incarcare» dacă e configurată în integrare).");
+    }
+    if (!isNonEmptyText("dropdown_mkx687jv") && !unloadingAddrOk) {
+        errors.push("Tara Descarcare este obligatorie (sau completează «Adresa Descarcare» dacă e configurată în integrare).");
+    }
+    if (!isNonEmptyText("text_mkypxb8h") && !unloadingAddrOk) {
+        errors.push("Localitate Descarcare este obligatorie (sau completează «Adresa Descarcare» dacă e configurată în integrare).");
+    }
     const greutateTxt = (cols["text_mkt9nr81"]?.text ?? "").trim();
     const greutate = parseNumberLoose(greutateTxt);
     if (!greutateTxt || !Number.isFinite(greutate) || greutate <= 0) {
@@ -159,6 +165,8 @@ export function buildLoadPayload(cols, itemId) {
     const srcLocalityRaw = (cols["text_mkypcczr"]?.text ?? "").trim();
     const dstCountryRaw = (cols["dropdown_mkx687jv"]?.text ?? "").trim();
     const dstLocalityRaw = (cols["text_mkypxb8h"]?.text ?? "").trim();
+    const srcAddrRaw = cfg.mondayColumns.loadingAddress ? (cols[cfg.mondayColumns.loadingAddress]?.text ?? "").trim() : "";
+    const dstAddrRaw = cfg.mondayColumns.unloadingAddress ? (cols[cfg.mondayColumns.unloadingAddress]?.text ?? "").trim() : "";
     const weightTxt = (cols["text_mkt9nr81"]?.text ?? "").trim();
     const LOADING_DATE_COLUMN_ID = "date_mkx77z0m";
     const loadingCol = cols[LOADING_DATE_COLUMN_ID];
@@ -207,27 +215,39 @@ export function buildLoadPayload(cols, itemId) {
     const weight = parseNumberLoose(weightTxt);
     if (!Number.isFinite(weight) || weight <= 0)
         errors.push("Greutate invalidă (weight).");
-    const srcCountry = normalizeCountry2LetterEnglish(srcCountryRaw);
-    if (!srcCountry)
-        errors.push(`Țara Încărcare nu se poate mapa la ISO2: '${srcCountryRaw}'`);
-    if (!srcLocalityRaw)
-        errors.push("Localitate Încărcare lipsă (source.name).");
-    const dstCountry = normalizeCountry2LetterEnglish(dstCountryRaw);
-    if (!dstCountry)
-        errors.push(`Țara Descărcare nu se poate mapa la ISO2: '${dstCountryRaw}'`);
-    if (!dstLocalityRaw)
-        errors.push("Localitate Descărcare lipsă (destination.name).");
-    const srcCity = bursaPlaceNameFromLocality(srcLocalityRaw, srcCountry);
-    const dstCity = bursaPlaceNameFromLocality(dstLocalityRaw, dstCountry);
+    const srcResolved = resolveBursaPlace({
+        role: "source",
+        localityRaw: srcLocalityRaw,
+        countryRaw: srcCountryRaw,
+        addressRaw: srcAddrRaw,
+        addressColumnId: cfg.mondayColumns.loadingAddress,
+    });
+    if (!srcResolved.ok)
+        errors.push(srcResolved.error);
+    const dstResolved = resolveBursaPlace({
+        role: "destination",
+        localityRaw: dstLocalityRaw,
+        countryRaw: dstCountryRaw,
+        addressRaw: dstAddrRaw,
+        addressColumnId: cfg.mondayColumns.unloadingAddress,
+    });
+    if (!dstResolved.ok)
+        errors.push(dstResolved.error);
+    const srcCountry = srcResolved.ok ? srcResolved.countryIso2 : null;
+    const dstCountry = dstResolved.ok ? dstResolved.countryIso2 : null;
+    const srcCity = srcResolved.ok ? srcResolved.city : "";
+    const dstCity = dstResolved.ok ? dstResolved.city : "";
     logger.info("Bursa payload debug: places", {
         srcLocalityRaw,
         srcCountryRaw,
-        srcCountry,
-        srcPlaceName: srcCity,
+        srcAddressRaw: srcAddrRaw,
+        srcAddressColumnId: cfg.mondayColumns.loadingAddress || null,
+        srcResolved: srcResolved.ok ? { countryIso2: srcResolved.countryIso2, city: srcResolved.city, fromAddress: srcResolved.fromAddress } : null,
         dstLocalityRaw,
         dstCountryRaw,
-        dstCountry,
-        dstPlaceName: dstCity,
+        dstAddressRaw: dstAddrRaw,
+        dstAddressColumnId: cfg.mondayColumns.unloadingAddress || null,
+        dstResolved: dstResolved.ok ? { countryIso2: dstResolved.countryIso2, city: dstResolved.city, fromAddress: dstResolved.fromAddress } : null,
         itemId,
     });
     const tt = mapTruckTypeFromMondayUi(transportLabel);
@@ -248,14 +268,10 @@ export function buildLoadPayload(cols, itemId) {
     if (uniqueRequiredTruck.length === 0)
         errors.push("requiredTruck invalid (gol).");
     const notes = [];
-    const srcAddrCol = (process.env.LOADING_ADDRESS_COLUMN_ID || "").trim();
-    const dstAddrCol = (process.env.UNLOADING_ADDRESS_COLUMN_ID || "").trim();
-    const srcAddr = srcAddrCol ? (cols[srcAddrCol]?.text ?? "").trim() : "";
-    const dstAddr = dstAddrCol ? (cols[dstAddrCol]?.text ?? "").trim() : "";
-    if (srcAddr)
-        notes.push(`Adresa încărcare: ${srcAddr}`);
-    if (dstAddr)
-        notes.push(`Adresa descărcare: ${dstAddr}`);
+    if (srcAddrRaw)
+        notes.push(`Adresa încărcare: ${srcAddrRaw}`);
+    if (dstAddrRaw)
+        notes.push(`Adresa descărcare: ${dstAddrRaw}`);
     if (looksLikeFullAddress(srcLocalityRaw) && srcLocalityRaw !== srcCity) {
         notes.push(`Localitate încărcare (raw): ${srcLocalityRaw}`);
     }
@@ -323,6 +339,140 @@ function looksLikeFullAddress(raw) {
     if (t.includes("/"))
         return true;
     if ((raw.match(/,/g) || []).length >= 3)
+        return true;
+    return false;
+}
+function resolveBursaPlace(input) {
+    const locality = input.localityRaw.trim();
+    const countryRaw = input.countryRaw.trim();
+    const addr = input.addressRaw.trim();
+    const countryFromDedicated = countryRaw ? normalizeCountry2LetterEnglish(countryRaw) : null;
+    if (countryRaw && !countryFromDedicated) {
+        return {
+            ok: false,
+            error: `[MAPPING] Țara (${input.role}) nu se poate mapa la ISO2 din '${countryRaw}'.`,
+        };
+    }
+    // Preferred: locality + country
+    if (locality && countryFromDedicated) {
+        const city = bursaPlaceNameFromLocality(locality, countryFromDedicated);
+        if (!city) {
+            return { ok: false, error: `[MAPPING] Localitatea (${input.role}) nu a putut fi normalizată pentru Bursa.` };
+        }
+        return { ok: true, countryIso2: countryFromDedicated, city, fromAddress: false };
+    }
+    // Locality present, country missing: try to infer country from address (if present), otherwise fail clearly.
+    if (locality && !countryFromDedicated) {
+        if (!addr) {
+            return {
+                ok: false,
+                error: `[MAPPING] Lipsește Țara pentru ${input.role}. Completează coloana «Tara …» sau completează «Adresa …» pentru inferență.`,
+            };
+        }
+        const parsed = parseBursaPlaceFromFullAddress(addr, null);
+        if (!parsed.ok) {
+            return { ok: false, error: `[MAPPING] Lipsește Țara pentru ${input.role} și nu pot infera țara din adresă: ${parsed.reason}` };
+        }
+        if (!cityLooksLikeStreet(locality)) {
+            const city = normalizeCityCasing(locality);
+            return { ok: true, countryIso2: parsed.countryIso2, city, fromAddress: true };
+        }
+        // Locality looks like an address too; treat address as authoritative.
+        return { ok: true, countryIso2: parsed.countryIso2, city: parsed.city, fromAddress: true };
+    }
+    // Country present, locality missing: derive city from address using country as a hint.
+    if (!locality && countryFromDedicated) {
+        if (!addr) {
+            return { ok: false, error: `[MAPPING] Lipsește Localitatea pentru ${input.role}. Completează coloana «Localitate …» sau «Adresa …» (cu env pentru id-ul coloanei).` };
+        }
+        const parsed = parseBursaPlaceFromFullAddress(addr, countryFromDedicated);
+        if (!parsed.ok) {
+            return { ok: false, error: `[MAPPING] Lipsește Localitatea pentru ${input.role} și nu pot deriva orașul din adresă: ${parsed.reason}` };
+        }
+        return { ok: true, countryIso2: parsed.countryIso2, city: parsed.city, fromAddress: true };
+    }
+    // Fallback: parse address (requires configured column id + non-empty address)
+    if (!addr) {
+        if (!input.addressColumnId) {
+            return {
+                ok: false,
+                error: `[MAPPING] Lipsesc localitatea/țara pentru ${input.role}. Configurează coloanele «Adresa Incarcare/Descarcare» (env LOADING_ADDRESS_COLUMN_ID / UNLOADING_ADDRESS_COLUMN_ID) pentru fallback.`,
+            };
+        }
+        return {
+            ok: false,
+            error: `[MAPPING] Lipsesc localitatea/țara pentru ${input.role}, iar «Adresa» (${input.addressColumnId}) este goală.`,
+        };
+    }
+    const parsed = parseBursaPlaceFromFullAddress(addr, countryFromDedicated);
+    if (!parsed.ok) {
+        return { ok: false, error: `[MAPPING] Nu pot deriva oraș/țară pentru ${input.role} din adresă: ${parsed.reason}` };
+    }
+    return { ok: true, countryIso2: parsed.countryIso2, city: parsed.city, fromAddress: true };
+}
+function parseBursaPlaceFromFullAddress(raw, countryHintIso2) {
+    const addr = raw.trim();
+    if (!addr)
+        return { ok: false, reason: "adresa este goală" };
+    // If we already have a reliable country hint, derive city using the same locality normalizer on the whole string.
+    if (countryHintIso2) {
+        const city = bursaPlaceNameFromLocality(addr, countryHintIso2);
+        if (!city || cityLooksLikeStreet(city)) {
+            return { ok: false, reason: "nu am putut extrage un oraș clar din adresă (încă pare stradă/adresă)." };
+        }
+        return { ok: true, countryIso2: countryHintIso2, city };
+    }
+    const extractedCountryRaw = extractCountryTokenFromAddress(addr);
+    const iso = extractedCountryRaw ? normalizeCountry2LetterEnglish(extractedCountryRaw) : null;
+    if (!iso) {
+        return { ok: false, reason: "nu am putut detecta țara în adresă (adaugă țara explicit sau completează coloana «Tara …»)." };
+    }
+    const city = bursaPlaceNameFromLocality(addr, iso);
+    if (!city || cityLooksLikeStreet(city)) {
+        return { ok: false, reason: "nu am putut extrage un oraș clar din adresă." };
+    }
+    return { ok: true, countryIso2: iso, city };
+}
+function extractCountryTokenFromAddress(addr) {
+    const parts = addr
+        .split(",")
+        .map((p) => p.trim())
+        .filter(Boolean);
+    if (parts.length === 0)
+        return null;
+    // Prefer last segment as country name (common in EU addresses)
+    const tail = parts[parts.length - 1];
+    if (tail) {
+        const iso = normalizeCountry2LetterEnglish(tail);
+        if (iso)
+            return tail;
+        if (/^[A-Z]{2}$/i.test(tail))
+            return tail.toUpperCase();
+    }
+    // Also handle "... / BZ, Italy" patterns
+    if (/\bItaly\b/i.test(addr))
+        return "Italy";
+    if (/\bRomania\b/i.test(addr))
+        return "Romania";
+    // ISO2 at end
+    const iso2 = addr.match(/\b([A-Z]{2})\b\s*$/);
+    if (iso2?.[1])
+        return iso2[1];
+    return null;
+}
+function cityLooksLikeStreet(city) {
+    const t = city.trim().toLowerCase();
+    if (!t)
+        return true;
+    if (/\d/.test(t))
+        return true;
+    if (t.startsWith("str.") || t.includes("strada"))
+        return true;
+    if (/\bvia\b/.test(t))
+        return true;
+    if (t.includes("sector"))
+        return true;
+    if (t.includes("/"))
         return true;
     return false;
 }

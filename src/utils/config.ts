@@ -22,6 +22,9 @@ export type AppConfig = {
     twoStepLink: string;
     /** Monday Link column used for clickable 2-step URL (display text "AICI"). */
     bursaTwoStepEmailLink: string;
+    /** Optional Monday Text columns containing full addresses (used as fallback for Bursa place mapping). */
+    loadingAddress: string;
+    unloadingAddress: string;
   };
   publicationBursa: {
     triggerLabel: string;
@@ -159,6 +162,8 @@ export function getConfig(): AppConfig {
       externalLoadId: (process.env.EXTERNAL_LOAD_ID_COLUMN_ID || "").trim(),
       twoStepLink: (process.env.TWO_STEP_LINK_COLUMN_ID || "").trim(),
       bursaTwoStepEmailLink: (process.env.BURSA_2STEP_EMAIL_LINK_COLUMN_ID || "link_mm2p86g1").trim(),
+      loadingAddress: (process.env.LOADING_ADDRESS_COLUMN_ID || "").trim(),
+      unloadingAddress: (process.env.UNLOADING_ADDRESS_COLUMN_ID || "").trim(),
     },
     publicationBursa: {
       triggerLabel: process.env.PUBLICARE_BURSA_TRIGGER_LABEL?.trim() || "Publica pe bursa",
