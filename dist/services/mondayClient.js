@@ -1,5 +1,6 @@
 import axios from "axios";
 import { getConfig } from "../utils/config.js";
+import { logger } from "../utils/logger.js";
 export class MondayClient {
     gqlUrl() {
         return getConfig().mondayApiUrl;
@@ -39,39 +40,64 @@ export class MondayClient {
         return item;
     }
     async changeTextColumn(boardId, itemId, columnId, text) {
+        const trimmed = String(text ?? "");
         const m = `
       mutation ($boardId: ID!, $itemId: ID!, $colId: String!, $val: JSON!) {
         change_column_value(board_id:$boardId, item_id:$itemId, column_id:$colId, value:$val) { id }
       }`;
+        const val = JSON.stringify({ text: trimmed });
+        logger.info("Monday write: changeTextColumn", {
+            boardId: String(boardId),
+            itemId: String(itemId),
+            columnId,
+            value: val,
+        });
         return this.gql(m, {
             boardId: String(boardId),
             itemId: String(itemId),
             colId: columnId,
-            val: JSON.stringify({ text }),
+            val,
         });
     }
     async changeStatusLabel(boardId, itemId, statusColId, label) {
+        const trimmed = String(label ?? "").trim();
         const m = `
       mutation ($boardId: ID!, $itemId: ID!, $colId: String!, $val: JSON!) {
         change_column_value(board_id:$boardId, item_id:$itemId, column_id:$colId, value:$val) { id }
       }`;
+        const val = JSON.stringify({ label: trimmed });
+        logger.info("Monday write: changeStatusLabel", {
+            boardId: String(boardId),
+            itemId: String(itemId),
+            columnId: statusColId,
+            value: val,
+        });
         return this.gql(m, {
             boardId: String(boardId),
             itemId: String(itemId),
             colId: statusColId,
-            val: JSON.stringify({ label }),
+            val,
         });
     }
     async changeLinkColumn(boardId, itemId, columnId, url, text) {
+        const trimmedUrl = String(url ?? "").trim();
+        const trimmedText = String(text ?? "").trim();
         const m = `
       mutation ($boardId: ID!, $itemId: ID!, $colId: String!, $val: JSON!) {
         change_column_value(board_id:$boardId, item_id:$itemId, column_id:$colId, value:$val) { id }
       }`;
+        const val = JSON.stringify({ url: trimmedUrl, text: trimmedText });
+        logger.info("Monday write: changeLinkColumn", {
+            boardId: String(boardId),
+            itemId: String(itemId),
+            columnId,
+            value: val,
+        });
         return this.gql(m, {
             boardId: String(boardId),
             itemId: String(itemId),
             colId: columnId,
-            val: JSON.stringify({ url, text }),
+            val,
         });
     }
     async fetchUserById(userId) {
